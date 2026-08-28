@@ -1,0 +1,27 @@
+{
+  "Despliegue": {
+    "AutoReinicio": true,
+    "ContinuarFase2": true
+  },
+  "Identidad": {
+    "PrefijoEquipo": "PLENERGY-",
+    "DivisionEmpresa": 1,
+    "PasswordSistemas": null,
+    "PasswordHP": null
+  },
+  "Limpieza": {
+    "DesinstalarMcAfee": true,
+    "LimpiarBloatware": true
+  },
+  "Seguridad": {
+    "ActivarBitLocker": true,
+    "ConfigurarVPN": true,
+    "InstalarEset": true,
+    "InstalarCrowdStrike": true,
+    "CID_CrowdStrike": "1234567890ABCDEF"
+  },
+  "Impresoras": {
+    "InstalarTodas": false,
+    "ImpresorasId": [1, 3]
+  }
+}

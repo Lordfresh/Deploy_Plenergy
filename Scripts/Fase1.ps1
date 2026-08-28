@@ -210,96 +210,149 @@ Write-Log "   MAQUETADOR PLENERGY: FASE 1 (Despliegue Pre-dominio)       " -Colo
 Write-Host "================================================================" -ForegroundColor Cyan
 
 # =========================================================
+# INTERCEPTOR ZERO TOUCH (JSON)
+# =========================================================
+$RutaJson = "$RutaBase\AutoDespliegue.json"
+$ModoDesatendido = $false
+
+if (Test-Path $RutaJson) {
+    $wshell = New-Object -ComObject Wscript.Shell
+    # 4 (Sí/No) + 32 (Pregunta) + 4096 (Siempre arriba)
+    $MensajeJson = "Se ha detectado AutoDespliegue.json.`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
+    $Respuesta = $wshell.Popup($MensajeJson, 10, "Modo Autonomo Detectado", 4 + 32 + 4096)
+
+    # Si pulsa 'Sí' (6) o se agota el tiempo (-1)
+    if ($Respuesta -eq 6 -or $Respuesta -eq -1) {
+        Write-Log "`n[+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
+        $ModoDesatendido = $true
+        
+        try {
+            $Config = Get-Content $RutaJson | ConvertFrom-Json
+
+            # 1. Validacion Segura de Contrasena
+            if (-not [string]::IsNullOrWhiteSpace($Config.Identidad.PasswordSistemas)) {
+                $SysPassSecure = ConvertTo-SecureString $Config.Identidad.PasswordSistemas -AsPlainText -Force
+            } else {
+                $SysPassSecure = $null
+                Write-Log "  [!] PasswordSistemas vacio en JSON. Se omitira la creacion del usuario." -Color DarkYellow
+            }
+
+            # 2. Asignacion con valores por defecto (Anti-Errores)
+            $OpcionEmpresa = if ($Config.Identidad.DivisionEmpresa) { [string]$Config.Identidad.DivisionEmpresa } else { "1" }
+            $NuevoNombre   = if ($Config.Identidad.PrefijoEquipo) { "$($Config.Identidad.PrefijoEquipo)$NumeroSerie" } else { $null }
+            $AutoReinicio  = [bool]$Config.Despliegue.AutoReinicio
+            $EjecutarFase2 = if ($Config.Despliegue.ContinuarFase2) { "S" } else { "N" }
+            $OpcionMcAfee  = if ($Config.Limpieza.DesinstalarMcAfee) { "1" } else { "0" }
+            
+            Write-Log "  [OK] Variables inyectadas en memoria. Saltando cuestionario." -Color Green
+        } catch {
+            Write-Log "  [X] Error fatal al leer el JSON. Revisa el formato (comas, comillas). Pasando a manual..." -Color Red
+            $ModoDesatendido = $false
+        }
+    } else {
+        Write-Log "`n[-] Modo autonomo cancelado por el usuario. Iniciando asistente manual..." -Color DarkYellow
+    }
+}
+
+# =========================================================
 # BLOQUE A: FASE DE RECOPILACIÓN DE DATOS (Interacción Humana)
 # =========================================================
-Write-Log "`n--- RECOPILACION DE DATOS ---" -Color Yellow
-
-# 1. Contrasena de Usuario Sistemas
-Write-Log "`n> Configuracion de la cuenta de Administrador Local alternativa (SISTEMAS)" -Color Cyan
-$UserName = "SISTEMAS"
-
-if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) {
-    Write-Log "  [i] El usuario $UserName ya existe en el equipo. Omitiendo peticion de contrasena." -Color DarkYellow
-    $SysPassSecure = $null 
-    Write-Log "Q&A - Usuario SISTEMAS: Usuario ya existente, se omite contraseña." -Nivel DEBUG -Silencioso
-} else {
-    do {
-        $SysPassSecure1 = Read-Host "  Introduce la contrasena para el usuario $UserName" -AsSecureString
-        $SysPassSecure2 = Read-Host "  Confirma la contrasena para el usuario $UserName" -AsSecureString
-
-        $TextoPass1 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure1)).GetNetworkCredential().Password
-        $TextoPass2 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure2)).GetNetworkCredential().Password
-
-        if ($TextoPass1 -ne $TextoPass2) { Write-Log "  [!] Las contrasenas no coinciden. Vuelve a intentarlo.`n" -Color Red }
-    } until ($TextoPass1 -eq $TextoPass2)
+if (-not $ModoDesatendido) {
+    Write-Log "`n--- RECOPILACION DE DATOS MANUAL ---" -Color Yellow
     
-    $SysPassSecure = $SysPassSecure1
-    Write-Log "Q&A - Usuario SISTEMAS: Contrasena validada y capturada." -Nivel DEBUG -Silencioso
+    # =========================================================
+    # BLOQUE A: FASE DE RECOPILACIÓN DE DATOS (Interacción Humana)
+    # =========================================================
+    Write-Log "`n--- RECOPILACION DE DATOS ---" -Color Yellow
+
+    # 1. Contrasena de Usuario Sistemas
+    Write-Log "`n> Configuracion de la cuenta de Administrador Local alternativa (SISTEMAS)" -Color Cyan
+    $UserName = "SISTEMAS"
+
+    if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) {
+        Write-Log "  [i] El usuario $UserName ya existe en el equipo. Omitiendo peticion de contrasena." -Color DarkYellow
+        $SysPassSecure = $null 
+        Write-Log "Q&A - Usuario SISTEMAS: Usuario ya existente, se omite contraseña." -Nivel DEBUG -Silencioso
+    } else {
+        do {
+            $SysPassSecure1 = Read-Host "  Introduce la contrasena para el usuario $UserName" -AsSecureString
+            $SysPassSecure2 = Read-Host "  Confirma la contrasena para el usuario $UserName" -AsSecureString
+
+            $TextoPass1 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure1)).GetNetworkCredential().Password
+            $TextoPass2 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure2)).GetNetworkCredential().Password
+
+            if ($TextoPass1 -ne $TextoPass2) { Write-Log "  [!] Las contrasenas no coinciden. Vuelve a intentarlo.`n" -Color Red }
+        } until ($TextoPass1 -eq $TextoPass2)
+        
+        $SysPassSecure = $SysPassSecure1
+        Write-Log "Q&A - Usuario SISTEMAS: Contrasena validada y capturada." -Nivel DEBUG -Silencioso
+    }
+
+    # 2. Gestión de McAfee
+    Write-Log "`n> Verificando existencia de McAfee en el sistema..." -Color Cyan
+    $RegistryPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    $McAfeeReg = Get-ItemProperty $RegistryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "McAfee" }
+    $McAfeePath = Test-Path "C:\Program Files*\McAfee*"
+
+    if ($McAfeeReg -or $McAfeePath) {
+        Write-Log "  [!] ¡McAfee detectado en el sistema!" -Color DarkYellow
+        Write-Log "  ¿Como deseas proceder con la desinstalacion de McAfee?"
+        Start-Sleep -seconds 2
+        Write-Host "  1. Usar el asistente de desinstalacion Mcafee"
+        Start-Sleep -seconds 1
+        Write-Host "  2. Lo hare yo manualmente desde el Panel de Control"
+        
+        $EntradaMcAfee = Read-Host "  Elige una opcion (Presiona ENTER para usar '1')"
+        if ([string]::IsNullOrWhiteSpace($EntradaMcAfee)) { $OpcionMcAfee = "1" } else { $OpcionMcAfee = $EntradaMcAfee.Trim() }
+        Write-Log "Q&A - McAfee: El usuario selecciono la opcion $OpcionMcAfee" -Nivel DEBUG -Silencioso
+    } else {
+        Write-Log "  [V] Equipo limpio de McAfee. Omitiendo opciones de desinstalacion." -Color Green
+        $OpcionMcAfee = "0"
+        Write-Log "Q&A - McAfee: No detectado. Paso omitido." -Nivel DEBUG -Silencioso
+    }
+
+    # 3. Identidad del Equipo
+    Write-Log "`n> El equipo actualmente se llama: $($env:COMPUTERNAME)" -Color Yellow
+    $CambiarNombre = Read-Host "  ¿Desea cambiar el nombre del equipo? [S / Enter=No]"
+    $NuevoNombre = $null
+
+    if ($CambiarNombre -match "^[sS]$") {
+        $EntradaNombre = Read-Host "  Introduce el NUEVO NOMBRE (Ej: PLENERGY-23)"
+        if ($EntradaNombre) { $NuevoNombre = $EntradaNombre.Trim().ToUpper() }
+        Write-Log "Q&A - Nombre Equipo: Peticion de cambio a $NuevoNombre." -Nivel DEBUG -Silencioso
+    } else {
+        Write-Log "Q&A - Nombre Equipo: Se mantiene el nombre original ($($env:COMPUTERNAME))." -Nivel DEBUG -Silencioso
+    }
+
+    # 4. Reinicio Automático
+    $EntradaReinicio = Read-Host "`n> ¿Desea que el equipo se reinicie AUTOMATICAMENTE al terminar todo el script? [S / Enter=No]"
+    $AutoReinicio = ($EntradaReinicio -match "^[sS]$")
+    Write-Log "Q&A - Reinicio: AutoReinicio configurado a $AutoReinicio." -Nivel DEBUG -Silencioso
+
+    # 5. Selección de Empresa
+    Write-Log "`n> Selecciona la division de la empresa para aplicar el fondo corporativo y salvapantalla:" -Color Cyan
+    Write-Log "  1. Plenergy ES (Fondo por defecto)"
+    Write-Log "  2. Plenergy PT"
+    Write-Log "  3. Plainco"
+    $EntradaEmpresa = Read-Host "  Elige una opcion (1/2/3) [Presiona ENTER para '1']"
+
+    if ([string]::IsNullOrWhiteSpace($EntradaEmpresa)) { $OpcionEmpresa = "1" } else { $OpcionEmpresa = $EntradaEmpresa.Trim() }
+
+    $NombreEmpresaLog = switch ($OpcionEmpresa) {
+        "2" { "Plenergy PT" }
+        "3" { "Plainco" }
+        Default { "Plenergy ES" }
+    }
+    Write-Log "Q&A - Empresa: El usuario selecciono $NombreEmpresaLog (Opcion $OpcionEmpresa)" -Nivel DEBUG -Silencioso
+
+    # 6. Consulta para ejecutar Fase2 del tiron
+    $EjecutarFase2 = Read-Host "¿Continuar con Fase 2 tras el reinicio? [S / Enter=No]"
 }
 
-# 2. Gestión de McAfee
-Write-Log "`n> Verificando existencia de McAfee en el sistema..." -Color Cyan
-$RegistryPaths = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-)
-$McAfeeReg = Get-ItemProperty $RegistryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "McAfee" }
-$McAfeePath = Test-Path "C:\Program Files*\McAfee*"
-
-if ($McAfeeReg -or $McAfeePath) {
-    Write-Log "  [!] ¡McAfee detectado en el sistema!" -Color DarkYellow
-    Write-Log "  ¿Como deseas proceder con la desinstalacion de McAfee?"
-    Start-Sleep -seconds 2
-    Write-Host "  1. Usar el asistente de desinstalacion Mcafee"
-    Start-Sleep -seconds 1
-    Write-Host "  2. Lo hare yo manualmente desde el Panel de Control"
-    
-    $EntradaMcAfee = Read-Host "  Elige una opcion (Presiona ENTER para usar '1')"
-    if ([string]::IsNullOrWhiteSpace($EntradaMcAfee)) { $OpcionMcAfee = "1" } else { $OpcionMcAfee = $EntradaMcAfee.Trim() }
-    Write-Log "Q&A - McAfee: El usuario selecciono la opcion $OpcionMcAfee" -Nivel DEBUG -Silencioso
-} else {
-    Write-Log "  [V] Equipo limpio de McAfee. Omitiendo opciones de desinstalacion." -Color Green
-    $OpcionMcAfee = "0"
-    Write-Log "Q&A - McAfee: No detectado. Paso omitido." -Nivel DEBUG -Silencioso
-}
-
-# 3. Identidad del Equipo
-Write-Log "`n> El equipo actualmente se llama: $($env:COMPUTERNAME)" -Color Yellow
-$CambiarNombre = Read-Host "  ¿Desea cambiar el nombre del equipo? [S / Enter=No]"
-$NuevoNombre = $null
-
-if ($CambiarNombre -match "^[sS]$") {
-    $EntradaNombre = Read-Host "  Introduce el NUEVO NOMBRE (Ej: PLENERGY-23)"
-    if ($EntradaNombre) { $NuevoNombre = $EntradaNombre.Trim().ToUpper() }
-    Write-Log "Q&A - Nombre Equipo: Peticion de cambio a $NuevoNombre." -Nivel DEBUG -Silencioso
-} else {
-    Write-Log "Q&A - Nombre Equipo: Se mantiene el nombre original ($($env:COMPUTERNAME))." -Nivel DEBUG -Silencioso
-}
-
-# 4. Reinicio Automático
-$EntradaReinicio = Read-Host "`n> ¿Desea que el equipo se reinicie AUTOMATICAMENTE al terminar todo el script? [S / Enter=No]"
-$AutoReinicio = ($EntradaReinicio -match "^[sS]$")
-Write-Log "Q&A - Reinicio: AutoReinicio configurado a $AutoReinicio." -Nivel DEBUG -Silencioso
-
-# 5. Selección de Empresa
-Write-Log "`n> Selecciona la division de la empresa para aplicar el fondo corporativo y salvapantalla:" -Color Cyan
-Write-Log "  1. Plenergy ES (Fondo por defecto)"
-Write-Log "  2. Plenergy PT"
-Write-Log "  3. Plainco"
-$EntradaEmpresa = Read-Host "  Elige una opcion (1/2/3) [Presiona ENTER para '1']"
-
-if ([string]::IsNullOrWhiteSpace($EntradaEmpresa)) { $OpcionEmpresa = "1" } else { $OpcionEmpresa = $EntradaEmpresa.Trim() }
-
-$NombreEmpresaLog = switch ($OpcionEmpresa) {
-    "2" { "Plenergy PT" }
-    "3" { "Plainco" }
-    Default { "Plenergy ES" }
-}
-Write-Log "Q&A - Empresa: El usuario selecciono $NombreEmpresaLog (Opcion $OpcionEmpresa)" -Nivel DEBUG -Silencioso
-
-# 6. Consulta para ejecutar Fase2 del tiron
-$EjecutarFase2 = Read-Host "¿Continuar con Fase 2 tras el reinicio? [S / Enter=No]"
 
 # =========================================================
 # BLOQUE B: Ejecucion desatendida
