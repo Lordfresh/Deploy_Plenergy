@@ -531,12 +531,57 @@ if ($InstalarEset -match "^[sS]$") {
 }
 
 # ---------------------------------------------------------
-# FINALIZACION Y REINICIO
+# FINALIZACION, LIMPIEZA Y REINICIO
 # ---------------------------------------------------------
 Write-Host "`n========================================================" -ForegroundColor Cyan
 Write-Log "¡Fase 2 completada con exito!" -Color Green
 Write-Host "========================================================" -ForegroundColor Cyan
 
+Write-Log "`n[+] Ejecutando cierre de seguridad y recoleccion de logs..." -Color Yellow
+
+# 1. Aplicar contrasena definitiva al usuario HP (Metodo Seguro)
+Write-Log "  -> Solicitando credenciales definitivas al tecnico..." -Color Cyan
+$CredencialesValidas = $false
+
+while (-not $CredencialesValidas) {
+    try {
+        $MensajeCaja = "Despliegue finalizado. Introduce la contrasena DEFINITIVA para el usuario local."
+        # Lanza el popup nativo de Windows pre-rellenando el usuario
+        $Credencial = Get-Credential -UserName "HP" -Message $MensajeCaja
+        
+        # Aplicamos la clave directamente como SecureString (Cifrada)
+        Get-LocalUser -Name "HP" | Set-LocalUser -Password $Credencial.Password -ErrorAction Stop
+        
+        Write-Log "  [OK] Contrasena del usuario HP actualizada y asegurada en el sistema." -Color Green
+        $CredencialesValidas = $true
+    } catch {
+        Write-Log "  [X] Accion cancelada o error. Debes establecer una contrasena obligatoriamente." -Color Red
+        Start-Sleep -Seconds 2
+    }
+}
+
+# 2. Eliminar el acceso directo del lanzador
+$RutaLanzador = "$env:PUBLIC\Desktop\LanzadorPlenergy.lnk"
+Remove-Item -Path $RutaLanzador -Force -ErrorAction SilentlyContinue
+
+# 3. Comprimir Logs (Nombre del PC + _Logs)
+$NombreEquipo = $env:COMPUTERNAME
+$RutaZip = "C:\${NombreEquipo}_Logs.zip"
+$RutaLogPPKG = "C:\Log_PPKG.txt"
+$RutaLogsCarpeta = "C:\Deploy_Plenergy\Logs\*"
+
+$ArchivosAComprimir = @()
+if (Test-Path $RutaLogsCarpeta) { $ArchivosAComprimir += $RutaLogsCarpeta }
+if (Test-Path $RutaLogPPKG) { $ArchivosAComprimir += $RutaLogPPKG }
+
+if ($ArchivosAComprimir.Count -gt 0) {
+    try {
+        Compress-Archive -Path $ArchivosAComprimir -DestinationPath $RutaZip -Update -Force
+        Write-Log "  [OK] Logs consolidados exitosamente en: $RutaZip" -Color Green
+    } catch { Write-Log "  [X] Error al empaquetar los logs." -Color Red }
+}
+
+# 4. Bloque de Reinicio (Tu logica)
 if ($AutoReinicio) {
     Write-Log "`n[!] Lanzando aviso de reinicio automatico (60s)..." -Color Yellow
     $wshell = New-Object -ComObject Wscript.Shell

@@ -13,7 +13,7 @@ $Impresoras = @(
 )
 
 # 2. Rutas del driver base de Xerox (Corregido)
-$CarpetaDriversLocal = "C:\1. IMPRESORAS\AltaLink_C8030-C8070_5.639.3.0_PS_x64"
+$CarpetaDriversLocal = "C:\IMPRESORAS\AltaLink_C8030-C8070_5.639.3.0_PS_x64"
 $RutaINF = "$CarpetaDriversLocal\AltaLink_C8030-C8070_5.639.3.0_PS_x64_Driver.inf"
 $NombreBaseDriver = "Xerox AltaLink C8030 PS" 
 

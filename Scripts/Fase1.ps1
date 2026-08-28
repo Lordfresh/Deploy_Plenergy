@@ -123,25 +123,25 @@ while (-not $InternetOK) {
         }
     }
 }
-# Prueba commit
+
 # ---------------------------------------------------------
 # 2. ANYDESK (Verificacion, Instalacion y Accesos Directos)
 # ---------------------------------------------------------
 Write-Log "`n[2/10] Verificando y configurando AnyDesk..." -Color Yellow
 
 $RutaAnyDeskExe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
-$ShortcutPath = "$([Environment]::GetFolderPath('Desktop'))\AnyDesk.lnk"
+# Fijamos la ruta al escritorio publico para evitar duplicados en distintos perfiles
+$ShortcutPath = "$env:PUBLIC\Desktop\AnyDesk.lnk"
 $InstaladoAhora = $false
 
 # 1. Instalación o Detección
 if (Test-Path $RutaAnyDeskExe) {
-    Write-Log "  [~] AnyDesk detectado por el PPKG. Saltando instalacion..." -Color DarkYellow
+    Write-Log "  [~] AnyDesk detectado en el sistema. Saltando instalacion..." -Color DarkYellow
 } else {
     $AnyDeskPath = "$CarpetaSoftware\AnyDesk.exe"
     
     if (Test-Path $AnyDeskPath) {
         try {
-            # Se instalan sin los comandos de shortcut para evitar fallos si se ejecuta en OOBE
             $ArgumentosAnyDesk = "--install", "`"C:\Program Files (x86)\AnyDesk`"", "--start-with-win", "--silent"
             Start-Process -FilePath $AnyDeskPath -ArgumentList $ArgumentosAnyDesk -Wait -NoNewWindow -ErrorAction Stop
             Write-Log "  [OK] AnyDesk instalado en el sistema." -Color Green
@@ -155,7 +155,7 @@ if (Test-Path $RutaAnyDeskExe) {
     }
 }
 
-# 2. Creación segura del acceso directo en el escritorio
+# 2. Creación segura del acceso directo en el escritorio publico
 if (Test-Path $RutaAnyDeskExe) {
     if (-not (Test-Path $ShortcutPath)) {
         Write-Log "  -> Generando acceso directo en el escritorio..." -Color Cyan
@@ -169,7 +169,7 @@ if (Test-Path $RutaAnyDeskExe) {
     }
 }
 
-# 2. Captura del ID (Bucle Robusto)
+# 3. Captura del ID (Bucle Robusto)
 if (Test-Path $RutaAnyDeskExe) {
     Write-Log "  -> Solicitando ID de conexion a los servidores de AnyDesk..." -Color Gray
     
@@ -184,7 +184,7 @@ if (Test-Path $RutaAnyDeskExe) {
         $Intentos++
     }
     
-    # 3. Presentacion y Guardado
+    # 4. Presentacion y Guardado
     if (-not [string]::IsNullOrWhiteSpace($ID_AnyDesk)) {
         
         $ArchivoID = "$RutaBase\AnyDesk_ID.txt"
@@ -297,6 +297,9 @@ $NombreEmpresaLog = switch ($OpcionEmpresa) {
     Default { "Plenergy ES" }
 }
 Write-Log "Q&A - Empresa: El usuario selecciono $NombreEmpresaLog (Opcion $OpcionEmpresa)" -Nivel DEBUG -Silencioso
+
+# 6. Consulta para ejecutar Fase2 del tiron
+$EjecutarFase2 = Read-Host "¿Continuar con Fase 2 tras el reinicio? [S / Enter=No]"
 
 # =========================================================
 # BLOQUE B: Ejecucion desatendida
@@ -526,24 +529,25 @@ Write-Log "`n[7/10] Copiando Impresoras y Fondos..." -Color Yellow
 
 # --- Drivers de Impresoras (A su ubicación permanente) ---
 $OrigenImpresoras = "$CarpetaRecursos\Impresoras"
-$DestinoRaiz = "C:\"
+$DestinoImpresoras = "C:\IMPRESORAS"
 
 if (Test-Path $OrigenImpresoras) { 
-    Write-Log "   -> Volcando contenido de drivers a $DestinoRaiz..." -Color Gray
+    Write-Log "   -> Volcando contenido de drivers a la raiz..." -Color Gray
     try {
-        Copy-Item -Path "$OrigenImpresoras\*" -Destination $DestinoRaiz -Recurse -Force -ErrorAction Stop
-        Write-Log "   [OK] Drivers guardados permanentemente en C:\1. IMPRESORAS." -Color Green
+        Copy-Item -Path "$OrigenImpresoras\*" -Destination "C:\" -Recurse -Force -ErrorAction Stop
+        Write-Log "   [OK] Drivers guardados permanentemente en $DestinoImpresoras." -Color Green
     } catch { Write-Log "   [X] Error al copiar la carpeta de impresoras." -Color Red }
 } else { Write-Log "   [!] Carpeta de impresoras no encontrada en Recursos. Omitiendo..." -Color DarkYellow }
 
 # --- Fondos Corporativos (A su ubicación permanente) ---
 $OrigenFondos = "$CarpetaRecursos\Fondos"
+$DestinoFondos = "C:\BC FONDOS"
 
 if (Test-Path $OrigenFondos) { 
-    Write-Log "   -> Volcando repositorio de fondos a $DestinoRaiz..." -Color Gray
+    Write-Log "   -> Volcando repositorio de fondos a la raiz..." -Color Gray
     try {
-        Copy-Item -Path "$OrigenFondos\*" -Destination $DestinoRaiz -Recurse -Force -ErrorAction Stop
-        Write-Log "   [OK] Fondos guardados permanentemente en C:\2. BC fondos." -Color Green
+        Copy-Item -Path "$OrigenFondos\*" -Destination "C:\" -Recurse -Force -ErrorAction Stop
+        Write-Log "   [OK] Fondos guardados permanentemente en $DestinoFondos." -Color Green
     } catch { Write-Log "   [X] Error al copiar la carpeta de fondos." -Color Red }
 } else { Write-Log "   [!] Carpeta de fondos no encontrada en Recursos. Omitiendo..." -Color DarkYellow }
 
@@ -560,13 +564,13 @@ $RutaSalvapantallasOrigen = switch ($OpcionEmpresa) {
     Default { "$DestinoFondos\BC PLENERGY\FONDOS Y SALVAPANTALLAS" }
 }
 
-# 1. APLICAR PANTALLA DE BLOQUEO[cite: 1]
+# 1. APLICAR PANTALLA DE BLOQUEO
 Write-Log "`n[+] Configurando Pantalla de Bloqueo Corporativa..." -Color Yellow
+$RegPolPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization"
+$RegCspPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP"
+
 if (Test-Path $RutaFondoBloqueo) {
     try {
-        $RegPolPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization"
-        $RegCspPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP"
-
         if (-not (Test-Path $RegPolPath)) { New-Item -Path $RegPolPath -Force | Out-Null }
         if (-not (Test-Path $RegCspPath)) { New-Item -Path $RegCspPath -Force | Out-Null }
 
@@ -578,13 +582,18 @@ if (Test-Path $RutaFondoBloqueo) {
 
         Write-Log "   [OK] Pantalla de bloqueo aplicada y asegurada." -Color Green
     } catch { Write-Log "   [X] Error al inyectar directivas de bloqueo." -Color Red }
-} else { Write-Log "   [!] No se encontro la imagen en $RutaFondoBloqueo." -Color DarkYellow }
+} else { 
+    Write-Log "   [!] Imagen no encontrada. Liberando directivas de bloqueo (Anti-Pantalla Negra)..." -Color DarkYellow 
+    Remove-ItemProperty -Path $RegPolPath -Name "LockScreenImage" -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $RegPolPath -Name "NoChangingLockScreen" -ErrorAction SilentlyContinue
+    Remove-Item -Path $RegCspPath -Force -Recurse -ErrorAction SilentlyContinue
+}
 
-# 2. APLICAR SALVAPANTALLAS[cite: 1]
+# 2. APLICAR SALVAPANTALLAS
 Write-Log "`n[+] Configurando Salvapantallas (Slideshow)..." -Color Yellow
 if ($null -ne $RutaSalvapantallasOrigen) {
     if (Test-Path $RutaSalvapantallasOrigen) {
-        $RutaDefaultFotos = "C:\Users\Default\Pictures\SalvapantallasCorp"
+        $RutaDefaultFotos = "C:\Users\Default\Pictures\Salvapantallas"
         if (-not (Test-Path $RutaDefaultFotos)) { New-Item -ItemType Directory -Path $RutaDefaultFotos -Force | Out-Null }
         
         Remove-Item -Path "$RutaDefaultFotos\*" -Force -Recurse -ErrorAction SilentlyContinue
@@ -605,6 +614,7 @@ if ($null -ne $RutaSalvapantallasOrigen) {
         }
     } else { Write-Log "   [!] Carpeta de salvapantallas no encontrada en $RutaSalvapantallasOrigen." -Color DarkYellow }
 } else { Write-Log "   -> La division seleccionada no utiliza salvapantallas." -Color DarkGray }
+
 
 # ---------------------------------------------------------
 # 8. IDENTIDAD (RENOMBRADO LOCAL)[cite: 1]
@@ -646,6 +656,7 @@ try {
     if ($SensorBateria -and $SensorBateria.PowerOnline -eq $true) {
         Write-Log "   [OK] Cargador conectado. Descargando TODO (Parches, BIOS y Drivers)..." -Color Green
         $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot
+        $RequiereReinicio = $true
     } else {
         Write-Log "   [!] Equipo usando bateria. Excluyendo BIOS y Drivers por seguridad." -Color DarkYellow
         $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot -NotCategory "Drivers","Upgrades"
@@ -657,6 +668,54 @@ try {
     } else { Write-Log "   [~] No se encontraron actualizaciones." -Color DarkYellow }
 } catch { Write-Log "   [X] Error al procesar Windows Update." -Color Red }
 
+
+# ---------------------------------------------------------
+# 9.5. PREPARACION DE FASE 2 (AUTOLOGON Y RUNONCE)
+# ---------------------------------------------------------
+if ($EjecutarFase2 -match "^[sS]$") {
+    Write-Log "`n[+] Construyendo puente hacia Fase 2..." -Color Yellow
+
+    $UsuarioAdmin = "HP" 
+    $PassTemp = "Temporal123!" # Contraseña temporal, se pedira el cambio al finalizar Fase2.ps1
+
+    # 1. Seguro Anti-Bloqueo: Forzar contraseña conocida
+    try {
+        net user $UsuarioAdmin $PassTemp | Out-Null
+        Write-Log "  [OK] Contrasena de $UsuarioAdmin forzada a '$PassTemp' para evitar bloqueos." -Color Green
+    } catch {
+        Write-Log "  [X] Error al resetear la contrasena. El AutoLogon podria fallar." -Color Red
+    }
+
+    # 2. Inyeccion de AutoLogon
+    try {
+        $WinlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+        Set-ItemProperty -Path $WinlogonPath -Name "AutoAdminLogon" -Value "1" -Type String -Force
+        Set-ItemProperty -Path $WinlogonPath -Name "DefaultUserName" -Value $UsuarioAdmin -Type String -Force
+        Set-ItemProperty -Path $WinlogonPath -Name "DefaultPassword" -Value $PassTemp -Type String -Force
+        # Limita el autologon a 1 sola vez para que no se quede en bucle infinito en el futuro
+        Set-ItemProperty -Path $WinlogonPath -Name "AutoLogonCount" -Value 1 -Type DWord -Force
+        Write-Log "  [OK] Inicio de sesion automatico configurado." -Color Green
+    } catch {
+        Write-Log "  [X] Fallo al escribir las claves de Winlogon." -Color Red
+    }
+
+    # 3. Lanzador de Arranque (RunOnce)
+    try {
+        $RunOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+        # Llamamos a PowerShell saltando las restricciones y maximizando la ventana
+        $ComandoFase2 = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Maximized -File `"C:\Deploy_Plenergy\Scripts\Fase2.ps1`""
+        Set-ItemProperty -Path $RunOncePath -Name "DespliegueFase2" -Value $ComandoFase2 -Type String -Force
+        Write-Log "  [OK] Fase 2 programada en RunOnce exitosamente." -Color Green
+        
+        # Como vamos a Fase 2, el reinicio de Fase 1 se vuelve obligatorio
+        $AutoReinicio = $true 
+    } catch {
+        Write-Log "  [X] Fallo al programar el RunOnce." -Color Red
+    }
+} else {
+    Write-Log "`n[-] Puente a Fase 2 omitido (El usuario marco 'N')." -Color DarkGray
+}
+
 # ---------------------------------------------------------
 # 10. FINALIZACIÓN Y REINICIO
 # ---------------------------------------------------------
@@ -664,10 +723,12 @@ Write-Host "`n========================================================" -Foregro
 Write-Log "Fin de maquetado de equipo Fase 1" -Color Green
 Write-Host "========================================================" -ForegroundColor Cyan
 
+$wshell = New-Object -ComObject Wscript.Shell
+
 if ($AutoReinicio) {
     Write-Log "`n[!] Lanzando aviso de reinicio automatico (60s)..." -Color Yellow
-    $wshell = New-Object -ComObject Wscript.Shell
-    $BotonPulsado = $wshell.Popup("El despliegue ha finalizado.`n`nEl equipo se reiniciara en 1 minuto.`n`n[Aceptar] = Reiniciar AHORA`n[Cancelar] = NO reiniciar", 60, "Reinicio", 1 + 48 + 4096)
+    # 1 (Aceptar/Cancelar) + 48 (Alerta) + 4096 (Siempre visible)
+    $BotonPulsado = $wshell.Popup("El despliegue ha finalizado.`n`nEl equipo se reiniciara en 1 minuto.`n`n[Aceptar] = Reiniciar AHORA`n[Cancelar] = NO reiniciar", 60, "Reinicio Automatico", 1 + 48 + 4096)
     
     if ($BotonPulsado -eq 2) {
         Write-Log "  -> [V] Reinicio CANCELADO. Hazlo manualmente." -Color DarkGray
@@ -677,11 +738,24 @@ if ($AutoReinicio) {
     }
 } else {
     if ($RequiereReinicio) {
-        $Reiniciar = Read-Host "`n> El equipo NECESITA reiniciarse. ¿Reiniciar AHORA? [S / Enter=No]"
-        if ($Reiniciar -match "^[sS]$") { Restart-Computer -Force }
+        Write-Log "`n[!] Solicitando confirmacion de reinicio requerido..." -Color Yellow
+        # 0 (Espera infinita). 4 (Si/No) + 48 (Alerta). El valor 6 significa que pulsó "Sí".
+        $BotonPulsado = $wshell.Popup("El equipo NECESITA reiniciarse para aplicar los cambios.`n`n¿Deseas reiniciar AHORA?", 0, "Reinicio Requerido", 4 + 48 + 4096)
+        if ($BotonPulsado -eq 6) { 
+            Write-Log "  -> Procediendo con el reinicio..." -Color Red
+            Restart-Computer -Force 
+        } else {
+            Write-Log "  -> [V] Reinicio Pospuesto. Hazlo manualmente." -Color DarkGray
+        }
     } else {
         Write-Log "Revisa Windows Update antes de continuar." -Color Yellow
-        $ReiniciarOpcional = Read-Host "`n> ¿Deseas reiniciar por si acaso? [S / Enter=No]"
-        if ($ReiniciarOpcional -match "^[sS]$") { Restart-Computer -Force }
+        # 4 (Si/No) + 64 (Informacion)
+        $BotonPulsado = $wshell.Popup("Despliegue finalizado sin reinicio obligatorio.`nRevisa Windows Update.`n`n¿Deseas reiniciar por si acaso?", 0, "Reinicio Opcional", 4 + 64 + 4096)
+        if ($BotonPulsado -eq 6) { 
+            Write-Log "  -> Procediendo con el reinicio..." -Color Red
+            Restart-Computer -Force 
+        } else {
+            Write-Log "  -> [V] Reinicio Omitido." -Color DarkGray
+        }
     }
 }

@@ -151,13 +151,28 @@ if ($SalvapantallasActivo -eq "1") {
     $Reporte += "  [~] Salvapantallas: PENDIENTE"
 }
 
-# Usuario SISTEMAS
-if (Get-LocalUser -Name "SISTEMAS" -ErrorAction SilentlyContinue) {
-    Write-Host "  [OK] Usuario local SISTEMAS creado." -ForegroundColor Green
-    $Reporte += "  [V] Cuenta Administrador Local (SISTEMAS): CREADA"
+# Verificacion automatica de Contrasena por defecto de HP
+if (Get-LocalUser -Name "HP" -ErrorAction SilentlyContinue) {
+    Write-Host "`n  -> Comprobando si la contrasena de 'HP' ha sido cambiada..." -ForegroundColor Cyan
+    
+    $PassPorDefecto = "Temporal123!"
+    
+    # Invocamos el motor local de .NET para probar la clave silenciosamente
+    Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+    $Contexto = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
+    
+    if ($Contexto.ValidateCredentials("HP", $PassPorDefecto)) {
+        # Si devuelve True, el inicio de sesion funciono (Sigue usando la clave expuesta)
+        Write-Host "  [X] ALERTA: La contrasena de HP sigue siendo la temporal ($PassPorDefecto)." -ForegroundColor Red
+        $Reporte += "`n  [X] Seguridad de cuenta (HP): VULNERABLE (Usa clave por defecto)"
+    } else {
+        # Si devuelve False, el inicio de sesion fallo (La clave fue cambiada con exito)
+        Write-Host "  [OK] La contrasena de HP ha sido modificada y es segura." -ForegroundColor Green
+        $Reporte += "`n  [V] Seguridad de cuenta (HP): MODIFICADA Y SEGURA"
+    }
 } else {
-    Write-Host "  [X] Usuario SISTEMAS no encontrado." -ForegroundColor Red
-    $Reporte += "  [X] Cuenta Administrador Local (SISTEMAS): NO CREADA"
+    Write-Host "  [X] Usuario HP no encontrado." -ForegroundColor Red
+    $Reporte += "`n  [X] Seguridad de cuenta (HP): USUARIO INEXISTENTE"
 }
 
 # ---------------------------------------------------------
