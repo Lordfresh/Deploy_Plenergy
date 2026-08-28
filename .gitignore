@@ -1,0 +1,12 @@
+# Archivos comprimidos y paquetes
+*.zip
+*.ppkg
+
+# Ejecutables e instaladores pesados
+*.exe
+*.msi
+
+# Carpetas de recursos pesados
+Impresoras/
+Fondos/
+Software/

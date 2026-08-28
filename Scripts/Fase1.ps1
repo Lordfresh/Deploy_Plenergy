@@ -1,0 +1,687 @@
+﻿[console]::OutputEncoding = [System.Text.Encoding]::UTF8 # Aquí se habla Español 
+
+# ---------------------------------------------------------
+# 1. ENTORNO DE DESPLIEGUE (ESTRUCTURA PROFESIONAL LOCAL)
+# ---------------------------------------------------------
+$RutaBase        = "C:\Deploy_Plenergy"
+$CarpetaScripts  = "$RutaBase\Scripts"
+$CarpetaSoftware = "$RutaBase\Software"
+$CarpetaRecursos = "$RutaBase\Recursos"
+$CarpetaLogs     = "$RutaBase\Logs"
+
+# 2. FUNCION DE LOGS (Unificada y Robusta)
+function Write-Log {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$Mensaje,
+        [string]$Color = "White",
+        [string]$Nivel = "INFO",
+        [switch]$Silencioso
+    )
+
+    $FechaHora = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $MensajeParaLog = "[$FechaHora] [$Nivel] $Mensaje"
+
+    if (-not $Silencioso) { Write-Host $Mensaje -ForegroundColor $Color }
+
+    if ($global:RutaArchivoLog) { Add-Content -Path $global:RutaArchivoLog -Value $MensajeParaLog }
+}
+
+# 3. IDENTIFICACION DEL EQUIPO Y LOGS
+$NumeroSerie = (Get-CimInstance Win32_BIOS).SerialNumber
+$FechaNombre = (Get-Date).ToString("yyyy-MM-dd")
+
+# Crear carpeta de logs si no existe
+if (-not (Test-Path $CarpetaLogs)) { New-Item -Path $CarpetaLogs -ItemType Directory -Force | Out-Null }
+
+$global:RutaArchivoLog = "$CarpetaLogs\SN-${NumeroSerie}_Fase1_${FechaNombre}.log"
+
+# ========================================================================
+# INICIO DEL SCRIPT (FASE 1)
+# ========================================================================
+
+# --- VALIDACIÓN ESTRUCTURAL ---
+if (-not (Test-Path $RutaBase)) {
+    Write-Host "`n[ERROR CRITICO] No se encontro el directorio base en $RutaBase." -ForegroundColor Red
+    Write-Host "Por favor, copia la carpeta del maquetador a la raiz del disco C: y vuelve a intentarlo." -ForegroundColor Yellow
+    Start-Sleep -Seconds 7
+    exit 
+}
+
+Write-Log "`n[OK] Entorno de despliegue validado en $RutaBase. Iniciando maquetacion..." -Color Green
+
+# ---------------------------------------------------------
+# 1. COMPROBACIÓN DE RED E INYECCIÓN WI-FI
+# ---------------------------------------------------------
+Write-Log "`n[1/10] Comprobando perfiles Wi-Fi y conectividad..." -Color Yellow
+
+$NombreWifi = "OperacionesIT"
+$RutaWifiPpkg = "$CarpetaRecursos\PPKG\WifiOperacionesIT.ppkg"
+
+# 1A. INYECCION DE PPKG DE WIFI EN CASO DE SER NECESARIO
+$PerfilesInstalados = netsh wlan show profiles
+if ($PerfilesInstalados -match $NombreWifi) {
+    Write-Log "  [OK] Las redes Wi-Fi '$NombreWifi' ya estan configuradas." -Color Green
+} else {
+    if (Test-Path $RutaWifiPpkg) {
+        Write-Log "  -> Inyectando paquete PPKG de redes Wi-Fi (Intento Inicial)..." -Color Cyan
+        try {
+            Install-ProvisioningPackage -PackagePath $RutaWifiPpkg -QuietInstall -ForceInstall
+            Write-Log "  [OK] Redes Wi-Fi inyectadas con exito. Esperando 5s para negociacion..." -Color Green
+            Start-Sleep -Seconds 5
+        } catch {
+            Write-Log "  [X] Hubo un problema al inyectar el paquete Wi-Fi inicial." -Color Red 
+            Write-Log "Fallo en PPKG: $($_.Exception.Message)" -Nivel ERROR -Silencioso
+        }
+    } else { 
+        Write-Log "  [!] No se encontro el archivo en $RutaWifiPpkg. Pasando a validacion..." -Color DarkGray 
+    }
+}
+
+# 1B. BUCLE DE VALIDACION DE INTERNET Y AUTO-RESCATE
+$InternetOK = $false
+
+while (-not $InternetOK) {
+    Write-Log "  -> Comprobando resolucion DNS y salida a Internet..." -Color Gray
+    
+    $PruebaDNS = Resolve-DnsName "www.google.com" -ErrorAction SilentlyContinue
+    
+    if ($PruebaDNS) {
+        Write-Log "  [V] ¡Conexion a Internet confirmada!" -Color Green
+        $InternetOK = $true
+    } else {
+        Write-Log "  [X] Sin conexion a Internet." -Color Red
+        
+        # --- INTENTO DE RESCATE DENTRO DEL BUCLE ---
+        $PerfilesActuales = netsh wlan show profiles
+        if (-not ($PerfilesActuales -match $NombreWifi)) {
+            if (Test-Path $RutaWifiPpkg) {
+                Write-Log "  -> Reintentando inyeccion de paquete PPKG..." -Color Cyan
+                try {
+                    Install-ProvisioningPackage -PackagePath $RutaWifiPpkg -QuietInstall -ForceInstall
+                    Write-Log "  [OK] Redes Wi-Fi inyectadas. Esperando 10s para negociacion..." -Color Green
+                    Start-Sleep -Seconds 10
+                    continue 
+                } catch {
+                    Write-Log "  [X] Fallo al inyectar el PPKG en el reintento." -Color Red 
+                }
+            }
+        }
+        # ---------------------------------------------
+        
+        Write-Host "`n[!] El script necesita Internet para instalar aplicaciones y otras tareas." -ForegroundColor Yellow
+        Write-Host "    Conecta un cable de red, verifica el PPKG o revisa la Wi-Fi manualmente." -ForegroundColor Yellow
+        
+        $RespuestaRed = Read-Host "`n> Escribe 'S' para continuar SIN RED, o presiona ENTER para reintentar"
+        
+        if ($RespuestaRed -match "^[sS]$") {
+            Write-Log "  -> [!] ADVERTENCIA: Se ha forzado continuar el despliegue sin conexion a internet." -Color DarkYellow
+            break 
+        } else {
+            Write-Log "  -> Reintentando ciclo de conexion..." -Color Cyan
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+# Prueba commit
+# ---------------------------------------------------------
+# 2. ANYDESK (Verificacion, Instalacion y Accesos Directos)
+# ---------------------------------------------------------
+Write-Log "`n[2/10] Verificando y configurando AnyDesk..." -Color Yellow
+
+$RutaAnyDeskExe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+$ShortcutPath = "$([Environment]::GetFolderPath('Desktop'))\AnyDesk.lnk"
+$InstaladoAhora = $false
+
+# 1. Instalación o Detección
+if (Test-Path $RutaAnyDeskExe) {
+    Write-Log "  [~] AnyDesk detectado por el PPKG. Saltando instalacion..." -Color DarkYellow
+} else {
+    $AnyDeskPath = "$CarpetaSoftware\AnyDesk.exe"
+    
+    if (Test-Path $AnyDeskPath) {
+        try {
+            # Se instalan sin los comandos de shortcut para evitar fallos si se ejecuta en OOBE
+            $ArgumentosAnyDesk = "--install", "`"C:\Program Files (x86)\AnyDesk`"", "--start-with-win", "--silent"
+            Start-Process -FilePath $AnyDeskPath -ArgumentList $ArgumentosAnyDesk -Wait -NoNewWindow -ErrorAction Stop
+            Write-Log "  [OK] AnyDesk instalado en el sistema." -Color Green
+            $InstaladoAhora = $true
+        } catch {
+            Write-Log "  [X] Error critico al lanzar el instalador de AnyDesk." -Color Red
+            Write-Log "Fallo Start-Process: $($_.Exception.Message)" -Nivel ERROR -Silencioso
+        }
+    } else { 
+        Write-Log "  [X] No se encontro el instalador en $AnyDeskPath." -Color Red 
+    }
+}
+
+# 2. Creación segura del acceso directo en el escritorio
+if (Test-Path $RutaAnyDeskExe) {
+    if (-not (Test-Path $ShortcutPath)) {
+        Write-Log "  -> Generando acceso directo en el escritorio..." -Color Cyan
+        $WshShell = New-Object -ComObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath = $RutaAnyDeskExe
+        $Shortcut.Save()
+        Write-Log "  [OK] Icono creado exitosamente." -Color Green
+    } else {
+        Write-Log "  [V] El icono de AnyDesk ya existe en el escritorio." -Color Green
+    }
+}
+
+# 2. Captura del ID (Bucle Robusto)
+if (Test-Path $RutaAnyDeskExe) {
+    Write-Log "  -> Solicitando ID de conexion a los servidores de AnyDesk..." -Color Gray
+    
+    $ID_AnyDesk = ""
+    $Intentos = 0
+    $MaxIntentos = 6 
+    
+    while ([string]::IsNullOrWhiteSpace($ID_AnyDesk) -and $Intentos -lt $MaxIntentos) {
+        if ($InstaladoAhora -or $Intentos -gt 0) { Start-Sleep -Seconds 5 }
+        $ID_AnyDesk = (& $RutaAnyDeskExe --get-id | ForEach-Object { $_ }) -join ""
+        if ($ID_AnyDesk) { $ID_AnyDesk = $ID_AnyDesk.Trim() }
+        $Intentos++
+    }
+    
+    # 3. Presentacion y Guardado
+    if (-not [string]::IsNullOrWhiteSpace($ID_AnyDesk)) {
+        
+        $ArchivoID = "$RutaBase\AnyDesk_ID.txt"
+        $ID_AnyDesk | Out-File -FilePath $ArchivoID -Encoding UTF8 -Force
+        
+        Write-Host "`n=================================================" -ForegroundColor Cyan
+        Write-Host "   ID DE ANYDESK DEL EQUIPO: $ID_AnyDesk" -ForegroundColor Green
+        Write-Host "=================================================`n" -ForegroundColor Cyan
+        
+        Write-Log "ID ($ID_AnyDesk) obtenido tras $Intentos intento(s). Guardado en $ArchivoID" -Nivel INFO -Silencioso
+        
+    } else {
+        Write-Log "  [X] No se pudo obtener el ID (El equipo quiza no tenga salida a Internet)." -Color Red
+    }
+}
+
+# Banner decorativo actualizado a Fase 1
+Write-Log "--- NUEVA SESION DE DESPLIEGUE (FASE 1) ---" -Nivel INFO -Silencioso
+Write-Log "Log inicializado. Numero de Serie: $NumeroSerie" -Nivel DEBUG -Silencioso
+
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Log "   MAQUETADOR PLENERGY: FASE 1 (Despliegue Pre-dominio)       " -Color Green
+Write-Host "================================================================" -ForegroundColor Cyan
+
+# =========================================================
+# BLOQUE A: FASE DE RECOPILACIÓN DE DATOS (Interacción Humana)
+# =========================================================
+Write-Log "`n--- RECOPILACION DE DATOS ---" -Color Yellow
+
+# 1. Contrasena de Usuario Sistemas
+Write-Log "`n> Configuracion de la cuenta de Administrador Local alternativa (SISTEMAS)" -Color Cyan
+$UserName = "SISTEMAS"
+
+if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) {
+    Write-Log "  [i] El usuario $UserName ya existe en el equipo. Omitiendo peticion de contrasena." -Color DarkYellow
+    $SysPassSecure = $null 
+    Write-Log "Q&A - Usuario SISTEMAS: Usuario ya existente, se omite contraseña." -Nivel DEBUG -Silencioso
+} else {
+    do {
+        $SysPassSecure1 = Read-Host "  Introduce la contrasena para el usuario $UserName" -AsSecureString
+        $SysPassSecure2 = Read-Host "  Confirma la contrasena para el usuario $UserName" -AsSecureString
+
+        $TextoPass1 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure1)).GetNetworkCredential().Password
+        $TextoPass2 = (New-Object System.Management.Automation.PSCredential("temp", $SysPassSecure2)).GetNetworkCredential().Password
+
+        if ($TextoPass1 -ne $TextoPass2) { Write-Log "  [!] Las contrasenas no coinciden. Vuelve a intentarlo.`n" -Color Red }
+    } until ($TextoPass1 -eq $TextoPass2)
+    
+    $SysPassSecure = $SysPassSecure1
+    Write-Log "Q&A - Usuario SISTEMAS: Contrasena validada y capturada." -Nivel DEBUG -Silencioso
+}
+
+# 2. Gestión de McAfee
+Write-Log "`n> Verificando existencia de McAfee en el sistema..." -Color Cyan
+$RegistryPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+$McAfeeReg = Get-ItemProperty $RegistryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "McAfee" }
+$McAfeePath = Test-Path "C:\Program Files*\McAfee*"
+
+if ($McAfeeReg -or $McAfeePath) {
+    Write-Log "  [!] ¡McAfee detectado en el sistema!" -Color DarkYellow
+    Write-Log "  ¿Como deseas proceder con la desinstalacion de McAfee?"
+    Start-Sleep -seconds 2
+    Write-Host "  1. Usar el asistente de desinstalacion Mcafee"
+    Start-Sleep -seconds 1
+    Write-Host "  2. Lo hare yo manualmente desde el Panel de Control"
+    
+    $EntradaMcAfee = Read-Host "  Elige una opcion (Presiona ENTER para usar '1')"
+    if ([string]::IsNullOrWhiteSpace($EntradaMcAfee)) { $OpcionMcAfee = "1" } else { $OpcionMcAfee = $EntradaMcAfee.Trim() }
+    Write-Log "Q&A - McAfee: El usuario selecciono la opcion $OpcionMcAfee" -Nivel DEBUG -Silencioso
+} else {
+    Write-Log "  [V] Equipo limpio de McAfee. Omitiendo opciones de desinstalacion." -Color Green
+    $OpcionMcAfee = "0"
+    Write-Log "Q&A - McAfee: No detectado. Paso omitido." -Nivel DEBUG -Silencioso
+}
+
+# 3. Identidad del Equipo
+Write-Log "`n> El equipo actualmente se llama: $($env:COMPUTERNAME)" -Color Yellow
+$CambiarNombre = Read-Host "  ¿Desea cambiar el nombre del equipo? [S / Enter=No]"
+$NuevoNombre = $null
+
+if ($CambiarNombre -match "^[sS]$") {
+    $EntradaNombre = Read-Host "  Introduce el NUEVO NOMBRE (Ej: PLENERGY-23)"
+    if ($EntradaNombre) { $NuevoNombre = $EntradaNombre.Trim().ToUpper() }
+    Write-Log "Q&A - Nombre Equipo: Peticion de cambio a $NuevoNombre." -Nivel DEBUG -Silencioso
+} else {
+    Write-Log "Q&A - Nombre Equipo: Se mantiene el nombre original ($($env:COMPUTERNAME))." -Nivel DEBUG -Silencioso
+}
+
+# 4. Reinicio Automático
+$EntradaReinicio = Read-Host "`n> ¿Desea que el equipo se reinicie AUTOMATICAMENTE al terminar todo el script? [S / Enter=No]"
+$AutoReinicio = ($EntradaReinicio -match "^[sS]$")
+Write-Log "Q&A - Reinicio: AutoReinicio configurado a $AutoReinicio." -Nivel DEBUG -Silencioso
+
+# 5. Selección de Empresa
+Write-Log "`n> Selecciona la division de la empresa para aplicar el fondo corporativo y salvapantalla:" -Color Cyan
+Write-Log "  1. Plenergy ES (Fondo por defecto)"
+Write-Log "  2. Plenergy PT"
+Write-Log "  3. Plainco"
+$EntradaEmpresa = Read-Host "  Elige una opcion (1/2/3) [Presiona ENTER para '1']"
+
+if ([string]::IsNullOrWhiteSpace($EntradaEmpresa)) { $OpcionEmpresa = "1" } else { $OpcionEmpresa = $EntradaEmpresa.Trim() }
+
+$NombreEmpresaLog = switch ($OpcionEmpresa) {
+    "2" { "Plenergy PT" }
+    "3" { "Plainco" }
+    Default { "Plenergy ES" }
+}
+Write-Log "Q&A - Empresa: El usuario selecciono $NombreEmpresaLog (Opcion $OpcionEmpresa)" -Nivel DEBUG -Silencioso
+
+# =========================================================
+# BLOQUE B: Ejecucion desatendida
+# =========================================================
+Write-Host "`n========================================================" -ForegroundColor Cyan
+Write-Log "Iniciando automatizacion. No se requiere mas interaccion..." -Color Green
+Write-Host "========================================================" -ForegroundColor Cyan
+
+# ---------------------------------------------------------
+# 2. USUARIO LOCAL (SISTEMAS)
+# ---------------------------------------------------------
+Write-Log "`n[2/10] Configurando cuenta de Administrador Local..." -Color Yellow
+$UserName = "SISTEMAS"
+
+if ($SysPassSecure) {
+    try {
+        New-LocalUser -Name $UserName -Password $SysPassSecure -PasswordNeverExpires -FullName "SISTEMAS" -Description "Cuenta de Administracion Local" -ErrorAction Stop | Out-Null
+        Write-Log "  [OK] Usuario $UserName creado con exito." -Color Green
+    } catch {
+        Write-Log "  [X] Error al crear el usuario." -Color Red
+        Write-Log "Fallo New-LocalUser: $($_.Exception.Message)" -Nivel ERROR -Silencioso
+    }
+} else {
+    Write-Log "  -> Omitiendo creacion (El usuario $UserName ya existe o no se introdujo contrasena)." -Color DarkGray
+}
+
+if (Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue) {
+    try {
+        Write-Log "  -> Verificando privilegios de administrador..." -Color Gray
+        $AdminGroup = (Get-LocalGroup | Where-Object SID -eq 'S-1-5-32-544').Name
+        $UserGroups = Get-LocalGroupMember -Group $AdminGroup | Where-Object Name -match $UserName
+        
+        if (-not $UserGroups) {
+            Add-LocalGroupMember -Group $AdminGroup -Member $UserName -ErrorAction Stop
+            Write-Log "  [OK] Privilegios de administrador concedidos." -Color Green
+        } else { 
+            Write-Log "  [V] El usuario $UserName ya es Administrador." -Color Green 
+        }
+    } catch {
+        Write-Log "  [X] Error al asignar permisos de Administrador." -Color Red
+    }
+}
+
+# ---------------------------------------------------------
+# 4. GESTIÓN DE MCAFEE
+# ---------------------------------------------------------
+Write-Log "`n[4/10] Gestionando McAfee..." -Color Yellow
+if ($McAfeeReg -or $McAfeePath) {
+    if ($OpcionMcAfee -eq "2") {
+        Write-Log "  -> Has elegido la eliminacion manual." -Color Gray
+        Write-Host "     > Por favor desinstala McAfee desde el panel de control antes de continuar." -ForegroundColor Yellow
+        Read-Host "     > [ Presiona Enter para continuar ]"
+        Start-Sleep -Seconds 10
+    } elseif ($OpcionMcAfee -eq "1") {
+        $MCPR_Url = "https://download.mcafee.com/molbin/iss-loc/SupportTools/MCPR/MCPR.exe"
+        $MCPR_Destino = "$env:TEMP\MCPR.exe"
+        
+        Write-Log "  -> Descargando la ultima version de MCPR directamente desde McAfee..." -Color Gray
+        try {
+            Invoke-WebRequest -Uri $MCPR_Url -OutFile $MCPR_Destino -UseBasicParsing -ErrorAction Stop
+            Write-Log "     [V] Descarga completada. Lanzando asistente de eliminacion..." -Color Cyan
+            Start-Process -FilePath $MCPR_Destino
+            Write-Log "  -> [ACCION REQUERIDA] Completa el Captcha en la ventana de McAfee y dale a 'Next'." -Color Cyan
+            
+            $TimeoutCaptcha = 300 
+            $Cronometro = [Diagnostics.Stopwatch]::StartNew()
+            $MotorArrancado = $false
+
+            while ($Cronometro.Elapsed.TotalSeconds -lt $TimeoutCaptcha) {
+                if (Get-Process -Name "mccleanup" -ErrorAction SilentlyContinue) {
+                    $MotorArrancado = $true
+                    break
+                }
+                Start-Sleep -Seconds 2
+            }
+            
+            if ($MotorArrancado) {
+                Write-Log "  -> [OK] Captcha superado. Desinstalando antivirus de fondo..." -Color Green
+                while (Get-Process -Name "mccleanup" -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 5 }
+                Write-Log "  -> [OK] Desinstalacion profunda terminada." -Color Green
+                Get-Process -Name "MCPR", "McClnUI" -ErrorAction SilentlyContinue | Stop-Process -Force
+                if (Test-Path $MCPR_Destino) { Remove-Item -Path $MCPR_Destino -Force -ErrorAction SilentlyContinue }
+                $RequiereReinicio = $true
+            } else {
+                Write-Log "  -> [X] Tiempo agotado (5 min) esperando el Captcha. Se omite la desinstalacion." -Color Red
+                Get-Process -Name "MCPR", "McClnUI" -ErrorAction SilentlyContinue | Stop-Process -Force
+            }
+        } catch {
+            Write-Log "     [!] Error al descargar o ejecutar MCPR. Comprueba la conexion a internet." -Color Red
+        }
+    }
+} else { 
+    Write-Log "  -> [~] McAfee no detectado en este equipo. Saltando este paso..." -Color DarkYellow 
+}
+
+# ---------------------------------------------------------
+# 5. LIMPIEZA PROFUNDA
+# ---------------------------------------------------------
+Write-Log "`n[5/10] Optimizando y limpiando sistema operativo..." -Color Yellow
+
+# Matar procesos[cite: 1]
+$Processes = @("OneDrive", "PowerAutomate", "Xbox", "QuickAssist", "GamingApp")
+foreach ($Proc in $Processes) { Get-Process -Name "*$Proc*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+Write-Log "  -> [OK] Procesos detenidos." -Color Green
+
+# Limpieza UWP[cite: 1]
+$AppList = "*Experience*", "*FeedbackHub*", "*BingWeather*", "*Family*", "*Journal*", "*BingSearch*", "*Clipchamp*", "*Todos*", "*Whiteboard*", "*MixedReality*", "*StickyNotes*", "*BingNews*", "*PowerAutomate*", "*Solitaire*", "*QuickAssist*", "*GamingApp*", "*Lenovo*", "*XboxApp*", "*XboxGamingOverlay*", "*XboxSpeechToTextOverlay*"
+Write-Log "   --- Limpiando perfiles de usuario y UWP base ---" -Color Cyan
+foreach ($App in $AppList) {
+    Get-AppxPackage -AllUsers -Name $App -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "StartMenu|ShellExperience|CloudExperience|PeopleExperience|Vantage" } | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like $App -and $_.DisplayName -notmatch "Vantage" } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+}
+Write-Log "  -> [OK] Aplicaciones UWP procesadas." -Color Green
+
+# Limpieza Lenovo[cite: 1]
+$AppsLenovo = Get-ItemProperty $RegistryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "Lenovo" -and $_.DisplayName -notmatch "Vantage" }
+if ($AppsLenovo) {
+    foreach ($App in $AppsLenovo) {
+        $UninstallString = if ($App.QuietUninstallString) { $App.QuietUninstallString } else { $App.UninstallString }
+        if ($UninstallString) {
+            try {
+                if ($UninstallString -match "msiexec") {
+                    $UninstallString = $UninstallString -replace "/I", "/X" -replace "/i", "/x"
+                    if ($UninstallString -notmatch "/qn|/quiet") { $UninstallString += " /qn /norestart" }
+                } else { if ($UninstallString -notmatch "/S|/silent|/quiet") { $UninstallString += " /S" } }
+                Start-Process "cmd.exe" -ArgumentList "/c $UninstallString" -Wait -WindowStyle Hidden -ErrorAction Stop
+            } catch { }
+        }
+    }
+    Write-Log "  -> [OK] Limpieza de Lenovo finalizada." -Color Green
+}
+
+# OneDrive[cite: 1]
+taskkill /f /im OneDrive.exe /t /fi "status eq running" 2>$null | Out-Null
+try {
+    if (Test-Path "$env:SystemRoot\System32\OneDriveSetup.exe") { Start-Process "$env:SystemRoot\System32\OneDriveSetup.exe" -ArgumentList "/uninstall" -Wait -WindowStyle Hidden -ErrorAction Stop }
+    if (Test-Path "$env:SystemRoot\SysWOW64\OneDriveSetup.exe") { Start-Process "$env:SystemRoot\SysWOW64\OneDriveSetup.exe" -ArgumentList "/uninstall" -Wait -WindowStyle Hidden -ErrorAction Stop }
+    Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "OneDrive" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "  -> [OK] OneDrive desinstalado correctamente." -Color Green
+} catch { Write-Log "  -> [!] Fallo menor al desinstalar OneDrive." -Color DarkYellow }
+
+# ---------------------------------------------------------
+# 6. INSTALACIÓN DE APLICACIONES MASIVAS
+# ---------------------------------------------------------
+Write-Log "`n[6/10] Desplegando software corporativo..." -Color Yellow
+
+# --- DisplayLink ---
+if (Test-Path "C:\Program Files*\DisplayLink Core Software") {
+    Write-Log "  [~] DisplayLink ya esta instalado. Omitiendo..." -Color DarkYellow
+} else {
+    $DisplayLinkPath = "$CarpetaSoftware\DisplayLink.exe"
+    if (Test-Path $DisplayLinkPath) {
+        try {
+            Start-Process -FilePath $DisplayLinkPath -ArgumentList "-silent" -Wait -NoNewWindow -ErrorAction Stop
+            Write-Log "  [OK] DisplayLink instalado." -Color Green
+        } catch { Write-Log "  [X] Error al instalar DisplayLink." -Color Red }
+    } else { Write-Log "  [!] Instalador de DisplayLink no encontrado en $CarpetaSoftware." -Color Red }
+}
+
+# --- PDF24 ---
+if (Test-Path "C:\Program Files*\PDF24\pdf24-Creator.exe") {
+    Write-Log "  [~] PDF24 ya esta instalado. Omitiendo..." -Color DarkYellow
+} else {
+    $PDFPath = "$CarpetaSoftware\pdf24-creator.msi"
+    if (Test-Path $PDFPath) {
+        try {
+            Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$PDFPath`" AUTOUPDATE=Yes DESKTOPICONS=Yes /qn /norestart" -Wait -NoNewWindow -ErrorAction Stop
+            Get-ChildItem -Path "C:\Users\Public\Desktop\*.lnk" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "PDF24" -and $_.Name -notmatch "Toolbox" } | Remove-Item -Force -ErrorAction SilentlyContinue
+            Write-Log "  [OK] PDF24 instalado (Solo icono Toolbox)." -Color Green
+        } catch { Write-Log "  [X] Error al instalar PDF24." -Color Red }
+    } else { Write-Log "  [!] Instalador de PDF24 no encontrado en $CarpetaSoftware." -Color Red }
+}
+
+# --- KeePass ---
+if (Test-Path "C:\Program Files*\KeePass Password Safe 2\KeePass.exe") {
+    Write-Log "  [~] KeePass ya esta instalado. Omitiendo..." -Color DarkYellow
+} else {
+    $KeePassPath = "$CarpetaSoftware\KeePass-Setup.exe"
+    if (Test-Path $KeePassPath) {
+        try {
+            Start-Process -FilePath $KeePassPath -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -NoNewWindow -ErrorAction Stop
+            Write-Log "  [OK] KeePass instalado." -Color Green
+        } catch { Write-Log "  [X] Error al instalar KeePass." -Color Red }
+    } else { Write-Log "  [!] Instalador de KeePass no encontrado en $CarpetaSoftware." -Color Red }
+}
+
+# --- FortiClient ---
+if (Test-Path "C:\Program Files*\Fortinet\FortiClient\FortiClient.exe") {
+    Write-Log "  [~] FortiClient ya esta instalado. Omitiendo..." -Color DarkYellow
+} else {
+    $InstaladorForti = "$CarpetaSoftware\FortiClientVPN.msi"
+    if (Test-Path $InstaladorForti) {
+        try {
+            Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$InstaladorForti`" ALLUSERS=1 /qn /norestart" -Wait -NoNewWindow -ErrorAction Stop
+            Write-Log "  [OK] FortiClient desplegado." -Color Green
+        } catch { Write-Log "  [X] Error al instalar FortiClient." -Color Red }
+    } else { Write-Log "  [!] Instalador de FortiClient no encontrado en $CarpetaSoftware." -Color Red }
+}
+
+# --- Winget[cite: 1]---
+Write-Log "`n   --- Desplegando paquetes mediante Winget ---" -Color Cyan
+$PaquetesWinget = @(
+    @{ Id = "Google.Chrome"; Nombre = "Google Chrome" },
+    @{ Id = "Mozilla.Firefox"; Nombre = "Mozilla Firefox" },
+    @{ Id = "7zip.7zip"; Nombre = "7-Zip" },
+    @{ Id = "Adobe.Acrobat.Reader.64-bit"; Nombre = "Adobe Acrobat Reader" },
+    @{ Id = "VideoLAN.VLC"; Nombre = "VLC Media Player" },
+    @{ Id = "Microsoft.Teams"; Nombre = "Microsoft Teams" },
+    @{ Id = "Lenovo.Vantage"; Nombre = "Lenovo Vantage" },
+    @{ Id = "WhatsApp.WhatsApp"; Nombre = "WhatsApp" }
+)
+
+foreach ($Paquete in $PaquetesWinget) {
+    $ArgsWinget = "install --id $($Paquete.Id) --exact --silent --accept-source-agreements --accept-package-agreements --scope machine"
+    try {
+        $Proc = Start-Process -FilePath "winget" -ArgumentList $ArgsWinget -Wait -NoNewWindow -PassThru -ErrorAction Stop
+        if ($Proc.ExitCode -eq 0) { Write-Log "  [OK] $($Paquete.Nombre) instalado correctamente." -Color Green }
+        elseif ($Proc.ExitCode -eq -1978335189) { Write-Log "  [~] $($Paquete.Nombre) ya estaba instalado." -Color DarkYellow }
+        else { Write-Log "  [X] Hubo un problema al procesar $($Paquete.Nombre)." -Color Red }
+    } catch { Write-Log "  [X] Error critico con Winget para $($Paquete.Nombre)." -Color Red }
+}
+
+# ---------------------------------------------------------
+# 7. PERSONALIZACIÓN E IMPRESORAS
+# ---------------------------------------------------------
+Write-Log "`n[7/10] Copiando Impresoras y Fondos..." -Color Yellow
+
+# --- Drivers de Impresoras (A su ubicación permanente) ---
+$OrigenImpresoras = "$CarpetaRecursos\Impresoras"
+$DestinoRaiz = "C:\"
+
+if (Test-Path $OrigenImpresoras) { 
+    Write-Log "   -> Volcando contenido de drivers a $DestinoRaiz..." -Color Gray
+    try {
+        Copy-Item -Path "$OrigenImpresoras\*" -Destination $DestinoRaiz -Recurse -Force -ErrorAction Stop
+        Write-Log "   [OK] Drivers guardados permanentemente en C:\1. IMPRESORAS." -Color Green
+    } catch { Write-Log "   [X] Error al copiar la carpeta de impresoras." -Color Red }
+} else { Write-Log "   [!] Carpeta de impresoras no encontrada en Recursos. Omitiendo..." -Color DarkYellow }
+
+# --- Fondos Corporativos (A su ubicación permanente) ---
+$OrigenFondos = "$CarpetaRecursos\Fondos"
+
+if (Test-Path $OrigenFondos) { 
+    Write-Log "   -> Volcando repositorio de fondos a $DestinoRaiz..." -Color Gray
+    try {
+        Copy-Item -Path "$OrigenFondos\*" -Destination $DestinoRaiz -Recurse -Force -ErrorAction Stop
+        Write-Log "   [OK] Fondos guardados permanentemente en C:\2. BC fondos." -Color Green
+    } catch { Write-Log "   [X] Error al copiar la carpeta de fondos." -Color Red }
+} else { Write-Log "   [!] Carpeta de fondos no encontrada en Recursos. Omitiendo..." -Color DarkYellow }
+
+# --- Asignacion de Rutas segun Empresa ---
+$RutaFondoBloqueo = switch ($OpcionEmpresa) {
+    "2" { "$DestinoFondos\BC PLENERGY PT\BLOQUEO\FONDO BLOQUEO 1920x1080.png" }
+    "3" { "$DestinoFondos\FONDOS PLAINCO\FONDO PANTALLA 1920x1080.png" }
+    Default { "$DestinoFondos\BC PLENERGY\BLOQUEO\FONDO BLOQUEO 1920x1080.png" }
+}
+
+$RutaSalvapantallasOrigen = switch ($OpcionEmpresa) {
+    "2" { "$DestinoFondos\BC PLENERGY PT\FONDOS Y SALVAPANTALLAS" }
+    "3" { $null } 
+    Default { "$DestinoFondos\BC PLENERGY\FONDOS Y SALVAPANTALLAS" }
+}
+
+# 1. APLICAR PANTALLA DE BLOQUEO[cite: 1]
+Write-Log "`n[+] Configurando Pantalla de Bloqueo Corporativa..." -Color Yellow
+if (Test-Path $RutaFondoBloqueo) {
+    try {
+        $RegPolPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization"
+        $RegCspPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP"
+
+        if (-not (Test-Path $RegPolPath)) { New-Item -Path $RegPolPath -Force | Out-Null }
+        if (-not (Test-Path $RegCspPath)) { New-Item -Path $RegCspPath -Force | Out-Null }
+
+        Set-ItemProperty -Path $RegPolPath -Name "LockScreenImage" -Value $RutaFondoBloqueo -Type String -Force
+        Set-ItemProperty -Path $RegPolPath -Name "NoChangingLockScreen" -Value 1 -Type DWord -Force
+        Set-ItemProperty -Path $RegCspPath -Name "LockScreenImageStatus" -Value 1 -Type DWord -Force
+        Set-ItemProperty -Path $RegCspPath -Name "LockScreenImagePath" -Value $RutaFondoBloqueo -Type String -Force
+        Set-ItemProperty -Path $RegCspPath -Name "LockScreenImageUrl" -Value $RutaFondoBloqueo -Type String -Force
+
+        Write-Log "   [OK] Pantalla de bloqueo aplicada y asegurada." -Color Green
+    } catch { Write-Log "   [X] Error al inyectar directivas de bloqueo." -Color Red }
+} else { Write-Log "   [!] No se encontro la imagen en $RutaFondoBloqueo." -Color DarkYellow }
+
+# 2. APLICAR SALVAPANTALLAS[cite: 1]
+Write-Log "`n[+] Configurando Salvapantallas (Slideshow)..." -Color Yellow
+if ($null -ne $RutaSalvapantallasOrigen) {
+    if (Test-Path $RutaSalvapantallasOrigen) {
+        $RutaDefaultFotos = "C:\Users\Default\Pictures\SalvapantallasCorp"
+        if (-not (Test-Path $RutaDefaultFotos)) { New-Item -ItemType Directory -Path $RutaDefaultFotos -Force | Out-Null }
+        
+        Remove-Item -Path "$RutaDefaultFotos\*" -Force -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path "$RutaSalvapantallasOrigen\*" -Destination $RutaDefaultFotos -Force -Recurse
+        
+        try {
+            reg load "HKU\PerfilBase" "C:\Users\Default\NTUSER.DAT" | Out-Null
+            $RutaRegDefault = "Registry::HKU\PerfilBase\Control Panel\Desktop"
+            Set-ItemProperty -Path $RutaRegDefault -Name "ScreenSaveActive" -Value "1" -Force
+            Set-ItemProperty -Path $RutaRegDefault -Name "ScreenSaveTimeOut" -Value "180" -Force
+            Set-ItemProperty -Path $RutaRegDefault -Name "SCRNSAVE.EXE" -Value "C:\Windows\System32\PhotoScreensaver.scr" -Force
+            Set-ItemProperty -Path $RutaRegDefault -Name "ScreenSaverIsSecure" -Value "1" -Force 
+            reg unload "HKU\PerfilBase" | Out-Null
+            Write-Log "   [OK] Salvapantallas programado exitosamente." -Color Green
+        } catch {
+            Write-Log "   [X] Error al configurar el salvapantallas." -Color Red
+            reg unload "HKU\PerfilBase" 2>$null | Out-Null
+        }
+    } else { Write-Log "   [!] Carpeta de salvapantallas no encontrada en $RutaSalvapantallasOrigen." -Color DarkYellow }
+} else { Write-Log "   -> La division seleccionada no utiliza salvapantallas." -Color DarkGray }
+
+# ---------------------------------------------------------
+# 8. IDENTIDAD (RENOMBRADO LOCAL)[cite: 1]
+# ---------------------------------------------------------
+Write-Log "`n[8/10] Gestionando Identidad Local del Equipo..." -Color Yellow
+$RequiereReinicio = $false
+
+if ($NuevoNombre -and ($env:COMPUTERNAME -ne $NuevoNombre)) {
+    try {
+        Write-Log "  -> Cambiando nombre del equipo a $NuevoNombre..." -Color Gray
+        $ParametrosNombre = @{ NewName = $NuevoNombre; Force = $true; PassThru = $true; ErrorAction = 'Stop' }
+        $ResultadoNombre = Rename-Computer @ParametrosNombre
+        
+        if ($ResultadoNombre) {
+            Write-Log "     [OK] Nombre cambiado correctamente a $NuevoNombre." -Color Green
+            Write-Log "     [!] REINICIO OBLIGATORIO para aplicar." -Color Yellow
+            $RequiereReinicio = $true
+        }
+    } catch { Write-Log "     [X] Error al cambiar el nombre del equipo." -Color Red }
+} elseif ($NuevoNombre -and ($env:COMPUTERNAME -eq $NuevoNombre)) {
+    Write-Log "  -> El equipo ya tiene el nombre solicitado ($NuevoNombre). Omitiendo." -Color Green
+} else { Write-Log "  -> No se solicito cambio de nombre en esta fase." -Color DarkYellow }
+
+# ---------------------------------------------------------
+# 9. WINDOWS UPDATE (SISTEMA + DRIVERS LENOVO)
+# ---------------------------------------------------------
+Write-Log "`n[+] Instalando actualizaciones de Windows y Drivers..." -Color Yellow
+try {
+    Write-Log "   -> Cargando modulo PSWindowsUpdate..." -Color Cyan
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
+    Install-Module -Name PSWindowsUpdate -Force -AllowClobber -ErrorAction SilentlyContinue | Out-Null
+    Import-Module PSWindowsUpdate -ErrorAction Stop
+    Add-WUServiceManager -ServiceID "7971f918-a847-4430-9279-4a52d1efe18d" -AddServiceFlag 7 -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    
+    $RutaLogUpdates = "$CarpetaLogs\Updates_$($env:COMPUTERNAME).log"
+    $SensorBateria = Get-WmiObject -Class BatteryStatus -Namespace root\wmi -ErrorAction SilentlyContinue
+    
+    if ($SensorBateria -and $SensorBateria.PowerOnline -eq $true) {
+        Write-Log "   [OK] Cargador conectado. Descargando TODO (Parches, BIOS y Drivers)..." -Color Green
+        $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot
+    } else {
+        Write-Log "   [!] Equipo usando bateria. Excluyendo BIOS y Drivers por seguridad." -Color DarkYellow
+        $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot -NotCategory "Drivers","Upgrades"
+    }
+
+    if ($ResultadoUpdates) {
+        $ResultadoUpdates | Out-File $RutaLogUpdates -Force
+        Write-Log "   [OK] Actualizaciones instaladas y log guardado." -Color Green
+    } else { Write-Log "   [~] No se encontraron actualizaciones." -Color DarkYellow }
+} catch { Write-Log "   [X] Error al procesar Windows Update." -Color Red }
+
+# ---------------------------------------------------------
+# 10. FINALIZACIÓN Y REINICIO
+# ---------------------------------------------------------
+Write-Host "`n========================================================" -ForegroundColor Cyan
+Write-Log "Fin de maquetado de equipo Fase 1" -Color Green
+Write-Host "========================================================" -ForegroundColor Cyan
+
+if ($AutoReinicio) {
+    Write-Log "`n[!] Lanzando aviso de reinicio automatico (60s)..." -Color Yellow
+    $wshell = New-Object -ComObject Wscript.Shell
+    $BotonPulsado = $wshell.Popup("El despliegue ha finalizado.`n`nEl equipo se reiniciara en 1 minuto.`n`n[Aceptar] = Reiniciar AHORA`n[Cancelar] = NO reiniciar", 60, "Reinicio", 1 + 48 + 4096)
+    
+    if ($BotonPulsado -eq 2) {
+        Write-Log "  -> [V] Reinicio CANCELADO. Hazlo manualmente." -Color DarkGray
+    } else {
+        Write-Log "  -> Procediendo con el reinicio..." -Color Red
+        Restart-Computer -Force
+    }
+} else {
+    if ($RequiereReinicio) {
+        $Reiniciar = Read-Host "`n> El equipo NECESITA reiniciarse. ¿Reiniciar AHORA? [S / Enter=No]"
+        if ($Reiniciar -match "^[sS]$") { Restart-Computer -Force }
+    } else {
+        Write-Log "Revisa Windows Update antes de continuar." -Color Yellow
+        $ReiniciarOpcional = Read-Host "`n> ¿Deseas reiniciar por si acaso? [S / Enter=No]"
+        if ($ReiniciarOpcional -match "^[sS]$") { Restart-Computer -Force }
+    }
+}
