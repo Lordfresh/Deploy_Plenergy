@@ -212,20 +212,48 @@ Write-Host "================================================================" -F
 # =========================================================
 # INTERCEPTOR ZERO TOUCH (JSON)
 # =========================================================
-$RutaJson = "$RutaBase\AutoDespliegue.json"
 $ModoDesatendido = $false
+$RutaJson = $null
+$ArchivosJsonEncontrados = @()
 
-if (Test-Path $RutaJson) {
+Write-Log "`n[+] Buscando archivo de configuracion Zero Touch (*AutoDespliegue.json)..." -Color Gray
+
+# 1. Buscar en la carpeta local base
+$ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
+if ($ArchivosLocales) { $ArchivosJsonEncontrados += $ArchivosLocales }
+
+# 2. Buscar en la raiz de todos los pendrives conectados
+$UnidadesUSB = Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 2
+foreach ($USB in $UnidadesUSB) {
+    $RutaRaizUSB = "$($USB.DeviceID)\"
+    $ArchivosUSB = Get-ChildItem -Path $RutaRaizUSB -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
+    if ($ArchivosUSB) { $ArchivosJsonEncontrados += $ArchivosUSB }
+}
+
+# 3. Ordenar TODOS los encontrados por fecha (El mas reciente gana) y procesar
+if ($ArchivosJsonEncontrados.Count -gt 0) {
+    $ArchivosJsonEncontrados = $ArchivosJsonEncontrados | Sort-Object LastWriteTime -Descending
+    $RutaJson = $ArchivosJsonEncontrados[0].FullName
+    
+    Write-Log "  [V] Archivo mas reciente detectado: $RutaJson" -Color Cyan
+
     $wshell = New-Object -ComObject Wscript.Shell
     # 4 (Sí/No) + 32 (Pregunta) + 4096 (Siempre arriba)
-    $MensajeJson = "Se ha detectado AutoDespliegue.json.`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
+    $MensajeJson = "Se ha detectado el archivo de configuracion MAS RECIENTE:`n$($ArchivosJsonEncontrados[0].Name)`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
     $Respuesta = $wshell.Popup($MensajeJson, 10, "Modo Autonomo Detectado", 4 + 32 + 4096)
 
     # Si pulsa 'Sí' (6) o se agota el tiempo (-1)
     if ($Respuesta -eq 6 -or $Respuesta -eq -1) {
-        Write-Log "`n[+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
+        Write-Log "  [+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
         $ModoDesatendido = $true
         
+        # Copiar el JSON al disco C: si viene del USB (Failsafe)
+        if ($RutaJson -notmatch "^C:\\Deploy_Plenergy") {
+            Copy-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
+            Write-Log "  [i] Archivo JSON clonado al disco C: por seguridad." -Color DarkGray
+        }
+
+              
         try {
             $Config = Get-Content $RutaJson | ConvertFrom-Json
 
@@ -239,26 +267,35 @@ if (Test-Path $RutaJson) {
 
             # 2. Asignacion con valores por defecto (Anti-Errores)
             $OpcionEmpresa = if ($Config.Identidad.DivisionEmpresa) { [string]$Config.Identidad.DivisionEmpresa } else { "1" }
-            $NuevoNombre   = if ($Config.Identidad.PrefijoEquipo) { "$($Config.Identidad.PrefijoEquipo)$NumeroSerie" } else { $null }
+            
+            # Asignar el nombre exacto del JSON, o dejar en $null para mantener el nombre original
+            if (-not [string]::IsNullOrWhiteSpace($Config.Identidad.PrefijoEquipo)) {
+                $NuevoNombre = $Config.Identidad.PrefijoEquipo
+            } else {
+                $NuevoNombre = $null
+                Write-Log "  [i] Nombre de equipo vacio en JSON. Se mantendra el nombre actual de fabrica." -Color DarkYellow
+            }
+            
             $AutoReinicio  = [bool]$Config.Despliegue.AutoReinicio
             $EjecutarFase2 = if ($Config.Despliegue.ContinuarFase2) { "S" } else { "N" }
             $OpcionMcAfee  = if ($Config.Limpieza.DesinstalarMcAfee) { "1" } else { "0" }
             
             Write-Log "  [OK] Variables inyectadas en memoria. Saltando cuestionario." -Color Green
         } catch {
-            Write-Log "  [X] Error fatal al leer el JSON. Revisa el formato (comas, comillas). Pasando a manual..." -Color Red
+            Write-Log "  [X] Error fatal al leer el JSON. Revisa el formato. Pasando a manual..." -Color Red
             $ModoDesatendido = $false
         }
     } else {
-        Write-Log "`n[-] Modo autonomo cancelado por el usuario. Iniciando asistente manual..." -Color DarkYellow
+        Write-Log "  [-] Modo autonomo cancelado por el usuario. Iniciando asistente manual..." -Color DarkYellow
     }
+} else {
+    Write-Log "  [-] No se encontro ningun JSON de autodespliegue. Iniciando asistente manual..." -Color Gray
 }
 
 # =========================================================
 # BLOQUE A: FASE DE RECOPILACIÓN DE DATOS (Interacción Humana)
 # =========================================================
 if (-not $ModoDesatendido) {
-    Write-Log "`n--- RECOPILACION DE DATOS MANUAL ---" -Color Yellow
     
     # =========================================================
     # BLOQUE A: FASE DE RECOPILACIÓN DE DATOS (Interacción Humana)

@@ -1,0 +1,14 @@
+$RSA = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
+$ClavePublica = $RSA.ToXmlString($false) # Solo cifra (Va al Generador)
+$ClavePrivada = $RSA.ToXmlString($true)  # Descifra (Va a la Fase 2 en el PPKG)
+
+Write-Host "CANDADO PUBLICO (Pegar en Generador): `n$ClavePublica`n"
+Write-Host "LLAVE PRIVADA (Pegar en Fase 2): `n$ClavePrivada`n"
+
+
+'C:\Users\mathi\Desktop\Deploy_Plenergy\CrearClaveRSA.ps1'
+CANDADO PUBLICO (Pegar en Generador): 
+<RSAKeyValue><Modulus>1xXQv3q102NF23jE00WXeV6W8I/B8h0SZ13PJu5fF+AUiLQbCBCaGq5g9EkknbZRsP/xLszgcIznzmwVihnll8Zwr6gMeDncjz4npuhPptNyJlFRL1ekZ6wADQXINPaTQVHq5qLPuaI2q1RiCK8eSkVjT0DlRsS7UGar8PhETEoK2GOrkYFANEC/CggAvZ+87fFmdu+hZgKupNrfoApzkeDoQ5V+xpXDWzMhE+sDjle/T7vuNWCqgyVCrTv3rddpJ7lsgTXNh9LCGRcmPUn4mEAs6iWVnI+VTMEbsKf2CI6EKB+L2BZfSKRpnqUOR8jEzeUIf8Gcqnc2OgExpIRoZQ==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>
+
+LLAVE PRIVADA (Pegar en Fase 2): 
+<RSAKeyValue><Modulus>1xXQv3q102NF23jE00WXeV6W8I/B8h0SZ13PJu5fF+AUiLQbCBCaGq5g9EkknbZRsP/xLszgcIznzmwVihnll8Zwr6gMeDncjz4npuhPptNyJlFRL1ekZ6wADQXINPaTQVHq5qLPuaI2q1RiCK8eSkVjT0DlRsS7UGar8PhETEoK2GOrkYFANEC/CggAvZ+87fFmdu+hZgKupNrfoApzkeDoQ5V+xpXDWzMhE+sDjle/T7vuNWCqgyVCrTv3rddpJ7lsgTXNh9LCGRcmPUn4mEAs6iWVnI+VTMEbsKf2CI6EKB+L2BZfSKRpnqUOR8jEzeUIf8Gcqnc2OgExpIRoZQ==</Modulus><Exponent>AQAB</Exponent><P>9aZuOn9xgsltkEFvrIewEa+gSwFu+50dPVdCbgJog2w3napCq7qWU6qAqT3oJpJQtuU8j5j3kAVJOydKGw7r2vbGGzyRP9u13sdfkrwQ3qEJ3dWVTmg2JTSGBM2d6UZycKwS/DY+k2jrBPMMNSUXbguS2RUiOdnNqRSUR2VBejc=</P><Q>4CW2oIfZosD3l28j8+qDTvGY2hINil2CivtH5AH86Oqyh+bh2zGw2fqiIksJ4cF8OQUfPXXDVJ1HOUK/clumovBGwCzyXJS79xxLnkaitu5P+wYSoAy2nlIAQKIttbsf4uJQd5uFkZPWQlh9ppk5DeJgbCf6Ut3+kcxW+3zD9EM=</Q><DP>Bpfb94f6JPeBEFEhTTErIZ5kH/8+2lQCN+ZCqy83XOenqnyqY2+Tn1VBNMmrlHVy4yXN9VC2vE/YAlVwoL9Kx0q+UHbUszETdZJGV2rizQbne+PCqSMU6PS68CAQr/UrFykXLVvLXCuBu1VGq5p+QX7gByGRFJpq8bHStQPbuQs=</DP><DQ>iuuU1sWbw11plneRhtkv7LucCnvp3Hm8MLswgUYiI5FieQxFqv6PJ2pJFov/YeXzQbvE8uiL2WNpAzo1QYFAM/hLQUwaIfskzDDDRSNuMYZeF6xZ2sxGWrVj5qsdPWbuikXNrXO8Qs+nmZMSvTB1xf8p156nbLid0Gse9dsL79U=</DQ><InverseQ>tJuTZ1MnEckK5b8RSy3NZd3AuCSTENkKXjPdyUEC8/xktFx3ku/0YIVO+KaArFeTx8eeSC8vSRv9J6MiN3xVaFVwNxWuFYomZradHIaSeIW5q1t03HN7DVqbUIPG+6OQEnXJH98uUQAohsMLR7xUQ9VrPvqheJ+SDNogQqYaZMY=</InverseQ><D>sJUDfcDT+ImfN7Ft/no7AvTqfPO5afn+OwjkYnT/c02P7i/XpYZjzpXtmYFXY3fkl6l5LFAdz6mPQoSwJmJegX300/Hm0unGL3/68+f0ROWB6P2H5pNQsaCfphFiLkFl4hHMBbATVLddpMmxdqm294kCIHYKBlDL7BVvAnYBNJNvoe8MLPyAZYWYO2P1DtcW7BG19VzyXPakW14w9GDHj9w5OmDOy9cKyJ+ea2tAbu65mOQUM3OUAm6I7Ng+L54sejtzH343GZeENdO9UG1ZP1xCFGeKzVq6WMHDVxrPBDgV+pFXNBFcNSNz8cD5e61aPylwgo2bi0Je+uOr0tiGfQ==</D></RSAKeyValue>

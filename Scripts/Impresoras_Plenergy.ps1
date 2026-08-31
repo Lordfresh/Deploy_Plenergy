@@ -31,35 +31,51 @@ if (Test-Path $CarpetaDriversLocal) {
     return 
 }
 
-# 4. Imprimir el Menu Dinamico[cite: 3]
-Write-Host "`nImpresoras disponibles:" -ForegroundColor Yellow
-for ($i = 0; $i -lt $Impresoras.Count; $i++) {
-    Write-Host "  [$($i + 1)] $($Impresoras[$i].Nombre) (IP: $($Impresoras[$i].IP))"
-}
-
-Write-Host "`nOpciones de seleccion:" -ForegroundColor Gray
-Write-Host " - Escribe 'T' para instalarlas TODAS."
-Write-Host " - Escribe numeros separados por comas (Ej: 1,3) para seleccionar varias."
-Write-Host " - Pulsa ENTER vacio para OMITIR la instalacion."
-
-$Seleccion = Read-Host "`n> Tu seleccion"
-
-# 5. Logica de seleccion[cite: 3]
-if ([string]::IsNullOrWhiteSpace($Seleccion)) {
-    Write-Host "  -> Omitiendo instalacion de impresoras." -ForegroundColor DarkGray
-    return 
-}
-
+# =========================================================
+# 4. LOGICA DE SELECCION (HIBRIDA AUTONOMA / MANUAL)
+# =========================================================
 $ImpresorasAInstalar = @()
 
-if ($Seleccion -match "^[tT]$") {
+# Si detecta variables globales del JSON, asume el control silencioso
+if ($global:Auto_ImpresorasTodas -eq $true) {
+    Write-Host "`n  [+] Despliegue Autonomo: Instalando TODAS las impresoras por directiva JSON." -ForegroundColor Magenta
     $ImpresorasAInstalar = $Impresoras
-} else {
-    $Indices = $Seleccion -split ","
-    foreach ($Num in $Indices) {
-        $IndiceReal = [int]$Num.Trim() - 1
+} elseif ($null -ne $global:Auto_ImpresorasIds -and $global:Auto_ImpresorasIds.Count -gt 0) {
+    Write-Host "`n  [+] Despliegue Autonomo: Instalando impresoras especificas ($($global:Auto_ImpresorasIds -join ', '))." -ForegroundColor Magenta
+    foreach ($Num in $global:Auto_ImpresorasIds) {
+        $IndiceReal = [int]$Num - 1
         if ($IndiceReal -ge 0 -and $IndiceReal -lt $Impresoras.Count) {
             $ImpresorasAInstalar += $Impresoras[$IndiceReal]
+        }
+    }
+} else {
+    # MODO MANUAL: Si no hay JSON, muestra el menu interactivo
+    Write-Host "`nImpresoras disponibles:" -ForegroundColor Yellow
+    for ($i = 0; $i -lt $Impresoras.Count; $i++) {
+        Write-Host "  [$($i + 1)] $($Impresoras[$i].Nombre) (IP: $($Impresoras[$i].IP))"
+    }
+
+    Write-Host "`nOpciones de seleccion:" -ForegroundColor Gray
+    Write-Host " - Escribe 'T' para instalarlas TODAS."
+    Write-Host " - Escribe numeros separados por comas (Ej: 1,3)."
+    Write-Host " - Pulsa ENTER vacio para OMITIR la instalacion."
+
+    $Seleccion = Read-Host "`n> Tu seleccion"
+
+    if ([string]::IsNullOrWhiteSpace($Seleccion)) {
+        Write-Host "  -> Omitiendo instalacion de impresoras." -ForegroundColor DarkGray
+        return 
+    }
+
+    if ($Seleccion -match "^[tT]$") {
+        $ImpresorasAInstalar = $Impresoras
+    } else {
+        $Indices = $Seleccion -split ","
+        foreach ($Num in $Indices) {
+            $IndiceReal = [int]$Num.Trim() - 1
+            if ($IndiceReal -ge 0 -and $IndiceReal -lt $Impresoras.Count) {
+                $ImpresorasAInstalar += $Impresoras[$IndiceReal]
+            }
         }
     }
 }
@@ -90,11 +106,15 @@ foreach ($Imp in $ImpresorasAInstalar) {
         Write-Host "¡OK!" -ForegroundColor Green
         $Instalar = $true
     } else {
-        Write-Host "FALLO (No responde en 3 intentos)" -ForegroundColor Red
-        
+    Write-Host "FALLO (No responde en 3 intentos)" -ForegroundColor Red
+    if ($global:Auto_ImpresorasTodas -or $global:Auto_ImpresorasIds) {
+        Write-Host "     -> [Auto] Forzando instalacion de puerto sin conexion..." -ForegroundColor Magenta
+        $Instalar = $true
+    } else {
         $Forzar = Read-Host "  [?] El equipo no ve la impresora. Instalar puerto de todas formas? [S/N]"
         $Instalar = ($Forzar -match "^[sS]$")
     }
+}
     
     if ($Instalar) {
         try {
