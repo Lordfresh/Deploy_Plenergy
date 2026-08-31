@@ -12,7 +12,7 @@ echo [3] Instalando AnyDesk... >> C:\Log_PPKG.txt
 echo [4] Configurando Registro AutoLogon... >> C:\Log_PPKG.txt
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f >> C:\Log_PPKG.txt 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d "HP" /f >> C:\Log_PPKG.txt 2>&1
-reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d "FineAdmin2022" /f >> C:\Log_PPKG.txt 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d "Temporal123!" /f >> C:\Log_PPKG.txt 2>&1
 
 echo [5] Suprimiendo pantallas de privacidad (Telemetria, Lapiz, etc)... >> C:\Log_PPKG.txt
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v DisablePrivacyExperience /t REG_DWORD /d 1 /f >> C:\Log_PPKG.txt 2>&1
