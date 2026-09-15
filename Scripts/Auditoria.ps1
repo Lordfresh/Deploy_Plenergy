@@ -120,9 +120,10 @@ if ($Dominio) {
 
 # BitLocker
 $BitLocker = Get-BitLockerVolume -MountPoint "C:" -ErrorAction SilentlyContinue
-if ($BitLocker.ProtectionStatus -eq 'On') {
-    Write-Host "  [OK] Disco C: cifrado con BitLocker." -ForegroundColor Green
-    $Reporte += "  [V] BitLocker (Disco C:): ACTIVO"
+
+if ($BitLocker.VolumeStatus -match "Encrypted|InProgress") {
+    Write-Host "  [OK] Disco C: cifrado con BitLocker ($($BitLocker.VolumeStatus))." -ForegroundColor Green
+    $Reporte += "  [V] BitLocker (Disco C:): ACTIVO ($($BitLocker.VolumeStatus))"
 } else {
     Write-Host "  [X] Disco C: NO esta cifrado." -ForegroundColor Red
     $Reporte += "  [X] BitLocker (Disco C:): APAGADO/DESCIFRADO"

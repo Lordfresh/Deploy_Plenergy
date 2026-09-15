@@ -36,6 +36,46 @@ if (-not (Test-Path $CarpetaLogs)) { New-Item -Path $CarpetaLogs -ItemType Direc
 
 $global:RutaArchivoLog = "$CarpetaLogs\SN-${NumeroSerie}_Fase1_${FechaNombre}.log"
 
+# ---------------------------------------------------------
+# BLOQUEO DE SUSPENSIÓN Y PANTALLA
+# ---------------------------------------------------------
+Write-Log "`n[+] Configurando plan de energia (Evitando suspension)..." -Color Yellow
+try {
+    # 0 = Nunca
+    powercfg.exe /change monitor-timeout-ac 0
+    powercfg.exe /change monitor-timeout-dc 0
+    powercfg.exe /change standby-timeout-ac 0
+    powercfg.exe /change standby-timeout-dc 0
+    powercfg.exe /change hibernate-timeout-ac 0
+    powercfg.exe /change hibernate-timeout-dc 0
+    Write-Log "  [OK] Apagado de pantalla y suspension desactivados." -Color Green
+} catch {
+    Write-Log "  [X] No se pudo modificar el plan de energia." -Color DarkYellow
+}
+
+# ---------------------------------------------------------
+# 2. CREACION DEL LANZADOR TEMPORAL EN ESCRITORIO
+# ---------------------------------------------------------
+$RutaLanzador = "$RutaBase\MaquetadorPlenergy.bat"
+$RutaAccesoDirecto = "C:\Users\Public\Desktop\Lanzador Maquetador.lnk"
+
+if (Test-Path $RutaLanzador) {
+    if (-not (Test-Path $RutaAccesoDirecto)) {
+        try {
+            $WshShell = New-Object -comObject WScript.Shell
+            $Shortcut = $WshShell.CreateShortcut($RutaAccesoDirecto)
+            $Shortcut.TargetPath = $RutaLanzador
+            $Shortcut.WorkingDirectory = $RutaBase
+            $Shortcut.Description = "Lanzador Temporal Plenergy"
+            $Shortcut.IconLocation = "powershell.exe, 0" 
+            $Shortcut.Save()
+            Write-Log "`n [!] Acceso directo temporal creado en el escritorio." -Color Cyan
+        } catch {
+            Write-Log "`n [X] No se pudo crear el acceso directo." -Color Red
+        }
+    }
+}
+
 # ========================================================================
 # INICIO DEL SCRIPT (FASE 1)
 # ========================================================================
@@ -504,7 +544,12 @@ foreach ($App in $AppList) {
 }
 Write-Log "  -> [OK] Aplicaciones UWP procesadas." -Color Green
 
-# Limpieza Lenovo[cite: 1]
+# Limpieza Lenovo
+$RegistryPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
 $AppsLenovo = Get-ItemProperty $RegistryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "Lenovo" -and $_.DisplayName -notmatch "Vantage" }
 if ($AppsLenovo) {
     foreach ($App in $AppsLenovo) {
@@ -589,7 +634,7 @@ if (Test-Path "C:\Program Files*\Fortinet\FortiClient\FortiClient.exe") {
     } else { Write-Log "  [!] Instalador de FortiClient no encontrado en $CarpetaSoftware." -Color Red }
 }
 
-# --- Winget[cite: 1]---
+# --- Winget ---
 Write-Log "`n   --- Desplegando paquetes mediante Winget ---" -Color Cyan
 $PaquetesWinget = @(
     @{ Id = "Google.Chrome"; Nombre = "Google Chrome" },
@@ -598,17 +643,21 @@ $PaquetesWinget = @(
     @{ Id = "Adobe.Acrobat.Reader.64-bit"; Nombre = "Adobe Acrobat Reader" },
     @{ Id = "VideoLAN.VLC"; Nombre = "VLC Media Player" },
     @{ Id = "Microsoft.Teams"; Nombre = "Microsoft Teams" },
-    @{ Id = "Lenovo.Vantage"; Nombre = "Lenovo Vantage" },
-    @{ Id = "WhatsApp.WhatsApp"; Nombre = "WhatsApp" }
+    @{ Id = "9WZDNCRFJ4MV"; Nombre = "Lenovo Vantage" },
+    @{ Id = "9NKSQGP7F2NH"; Nombre = "WhatsApp" }
 )
 
 foreach ($Paquete in $PaquetesWinget) {
-    $ArgsWinget = "install --id $($Paquete.Id) --exact --silent --accept-source-agreements --accept-package-agreements --scope machine"
+    # Trampa para la MS Store: Si el ID es alfanumérico de 12 letras, no usamos scope machine
+    $Scope = if ($Paquete.Id -match "^[A-Z0-9]{12}$") { "" } else { "--scope machine" }
+    
+    $ArgsWinget = "install --id $($Paquete.Id) --exact --silent --accept-source-agreements --accept-package-agreements $Scope"
+    
     try {
         $Proc = Start-Process -FilePath "winget" -ArgumentList $ArgsWinget -Wait -NoNewWindow -PassThru -ErrorAction Stop
         if ($Proc.ExitCode -eq 0) { Write-Log "  [OK] $($Paquete.Nombre) instalado correctamente." -Color Green }
         elseif ($Proc.ExitCode -eq -1978335189) { Write-Log "  [~] $($Paquete.Nombre) ya estaba instalado." -Color DarkYellow }
-        else { Write-Log "  [X] Hubo un problema al procesar $($Paquete.Nombre)." -Color Red }
+        else { Write-Log "  [X] Hubo un problema al procesar $($Paquete.Nombre). (ExitCode: $($Proc.ExitCode))" -Color Red }
     } catch { Write-Log "  [X] Error critico con Winget para $($Paquete.Nombre)." -Color Red }
 }
 
@@ -729,35 +778,40 @@ if ($NuevoNombre -and ($env:COMPUTERNAME -ne $NuevoNombre)) {
 } else { Write-Log "  -> No se solicito cambio de nombre en esta fase." -Color DarkYellow }
 
 # ---------------------------------------------------------
-# 9. WINDOWS UPDATE (SISTEMA + DRIVERS LENOVO)
+# 9. WINDOWS UPDATE (SOLO DRIVERS + GATILLO NATIVO)
 # ---------------------------------------------------------
-Write-Log "`n[+] Instalando actualizaciones de Windows y Drivers..." -Color Yellow
+Write-Log "`n[+] Configurando Windows Update y Drivers..." -Color Yellow
 try {
-    Write-Log "   -> Cargando modulo PSWindowsUpdate..." -Color Cyan
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
-    Install-Module -Name PSWindowsUpdate -Force -AllowClobber -ErrorAction SilentlyContinue | Out-Null
-    Import-Module PSWindowsUpdate -ErrorAction Stop
-    Add-WUServiceManager -ServiceID "7971f918-a847-4430-9279-4a52d1efe18d" -AddServiceFlag 7 -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    
-    $RutaLogUpdates = "$CarpetaLogs\Updates_$($env:COMPUTERNAME).log"
     $SensorBateria = Get-WmiObject -Class BatteryStatus -Namespace root\wmi -ErrorAction SilentlyContinue
     
+    # 1. INSTALACIÓN ESTRICTA DE DRIVERS (Rápido y Seguro)
     if ($SensorBateria -and $SensorBateria.PowerOnline -eq $true) {
-        Write-Log "   [OK] Cargador conectado. Descargando TODO (Parches, BIOS y Drivers)..." -Color Green
-        $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot
-        $RequiereReinicio = $true
+        Write-Log "   -> Cargador detectado. Descargando SOLO Drivers de hardware..." -Color Cyan
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
+        Install-Module -Name PSWindowsUpdate -Force -AllowClobber -ErrorAction SilentlyContinue | Out-Null
+        Import-Module PSWindowsUpdate -ErrorAction Stop
+        
+        # Solo permitimos la categoría los drivers 
+        $ResultadoDrivers = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot -Category "Drivers" -ErrorAction SilentlyContinue
+        
+        if ($ResultadoDrivers) { 
+            Write-Log "   [OK] Drivers instalados correctamente." -Color Green
+            $RequiereReinicio = $true 
+        } else { Write-Log "   [~] Los drivers ya estan al dia." -Color DarkYellow }
     } else {
-        Write-Log "   [!] Equipo usando bateria. Excluyendo BIOS y Drivers por seguridad." -Color DarkYellow
-        $ResultadoUpdates = Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot -NotCategory "Drivers","Upgrades"
+        Write-Log "   [!] Equipo en bateria. Omitiendo instalacion de drivers por seguridad." -Color DarkYellow
     }
 
-    if ($ResultadoUpdates) {
-        $ResultadoUpdates | Out-File $RutaLogUpdates -Force
-        Write-Log "   [OK] Actualizaciones instaladas y log guardado." -Color Green
-    } else { Write-Log "   [~] No se encontraron actualizaciones." -Color DarkYellow }
-} catch { Write-Log "   [X] Error al procesar Windows Update." -Color Red }
+    # 2. GATILLO NATIVO PARA PARCHES DEL SO (Fire and Forget)
+    Write-Log "   -> Despertando al motor nativo de Windows Update..." -Color Gray
+    
+    # UsoClient ordena a Windows que busque y descargue los parches grandes en segundo plano real
+    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -WindowStyle Hidden
+    
+    Write-Log "   [OK] Parches de seguridad delegados al sistema. Descargando en la sombra." -Color Green
 
+} catch { Write-Log "   [X] Error al configurar el gestor de actualizaciones." -Color Red }
 
 # ---------------------------------------------------------
 # 9.5. PREPARACION DE FASE 2 (AUTOLOGON Y RUNONCE)

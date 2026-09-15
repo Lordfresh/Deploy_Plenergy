@@ -55,13 +55,13 @@ $EstadoBL = Get-BitLockerVolume -MountPoint "C:" -ErrorAction SilentlyContinue
 $BitLockerYaActivo = ($EstadoBL.ProtectionStatus -eq 'On')
 
 # =========================================================
-# INTERCEPTOR ZERO TOUCH (JSON) - FASE 2
+# INTERCEPTOR JSON - FASE 2
 # =========================================================
 $ModoDesatendido = $false
 $RutaJson = $null
 $ArchivosJsonEncontrados = @()
 
-Write-Log "`n[+] Buscando archivo de configuracion Zero Touch (*AutoDespliegue.json)..." -Color Gray
+Write-Log "`n[+] Buscando archivo de autodespliegue (*AutoDespliegue.json)..." -Color Gray
 
 # 1. Buscar en la carpeta local base
 $ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
@@ -89,13 +89,13 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
 
     # Si pulsa 'Sí' (6) o se agota el tiempo (-1)
     if ($Respuesta -eq 6 -or $Respuesta -eq -1) {
-        Write-Log "  [+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
+        Write-Log "  [+] Modo auto activado. Mapeando cerebro JSON..." -Color Magenta
         $ModoDesatendido = $true
         
-        # Copiar el JSON al disco C: si viene del USB (Failsafe)
+        # Mueve el JSON al disco C: si viene del USB
         if ($RutaJson -notmatch "^C:\\Deploy_Plenergy") {
-            Copy-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
-            Write-Log "  [i] Archivo JSON clonado al disco C: por seguridad." -Color DarkGray
+            Move-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
+            Write-Log "  [i] Archivo JSON movido al disco C: por seguridad." -Color DarkGray
         }
 
         
@@ -131,18 +131,38 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
             $global:Auto_ImpresorasTodas = $Config.Impresoras.InstalarTodas
             $global:Auto_ImpresorasIds = $Config.Impresoras.ImpresorasId
 
+            # --- LIMPIEZA DE RED DE MAQUETACION ---
+            Write-Log "  -> Olvidando red Wi-Fi de maquetacion (OperacionesIT) para forzar salto a LAN..." -Color Cyan
+            netsh wlan delete profile name="OperacionesIT" 2>&1 | Out-Null
+            Start-Sleep -Seconds 2 # Le damos 2 segundos a Windows para que asimile el corte de red
+
             # --- PARCHE HIBRIDO: Pedir credenciales de dominio si no esta en AD ---
             $SysInfo = Get-CimInstance Win32_ComputerSystem
             $DominioDestino = "plenoil.com"
             
             if (-not $SysInfo.PartOfDomain -and $env:COMPUTERNAME -match "^PLENERGY-") {
-                Write-Log "  -> [Modo Hibrido] El equipo requiere dominio. Verificando red corporativa..." -Color Cyan
+                Write-Log "  -> [Modo Hibrido] El equipo requiere dominio. Verificando red corporativa (DNS Interno)..." -Color Cyan
                 
-                # 1. El Guardian: Comprobar DNS Interno antes de preguntar nada
-                $PruebaDNSInterno = Resolve-DnsName "_ldap._tcp.dc._msdcs.$DominioDestino" -Type SRV -ErrorAction SilentlyContinue
+                # 1. Validacion DNS Interno  con Reintentos
+                $RedDetectada = $false
                 
-                if ($null -eq $PruebaDNSInterno) {
-                    Write-Log "     [X] ERROR: No se detecta el DNS interno de $DominioDestino." -Color Red
+                for ($i = 1; $i -le 3; $i++) {
+                    $PruebaDNSInterno = Resolve-DnsName "_ldap._tcp.dc._msdcs.$DominioDestino" -Type SRV -ErrorAction SilentlyContinue
+                    
+                    if ($null -ne $PruebaDNSInterno) {
+                        $RedDetectada = $true
+                        break
+                    }
+                    
+                    if ($i -lt 3) {
+                        Write-Log "     [!] Intento $i/3 fallido: No se ve el servidor. Verifique el Wi-Fi o conecte un cable de red." -Color Yellow
+                        Write-Log "     -> Reintentando automaticamente en 10 segundos..." -Color DarkGray
+                        Start-Sleep -Seconds 10
+                    }
+                }
+                
+                if (-not $RedDetectada) {
+                    Write-Log "     [X] ERROR: Imposible contactar con el DNS interno de $DominioDestino." -Color Red
                     Write-Log "     -> Omitiendo peticion de credenciales (El equipo no esta en la red corporativa)." -Color DarkYellow
                     $MeterDominioFase2 = $false
                 } else {
@@ -177,7 +197,7 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
                             
                             # 3. Validacion LDAP
                             $Directorio = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$DominioDestino", $Usuario, $Clave)
-                            [void]$Directorio.NativeObject # <-- El [void] quita el error de VSCode
+                            [void]$Directorio.NativeObject 
                             
                             Write-Log "     [V] Autenticacion LDAP exitosa." -Color Green
                             $CredencialesValidas = $true
@@ -186,21 +206,19 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
                         } 
                         catch {
                             Write-Log "     [X] ERROR: Credenciales rechazadas o ventana cancelada." -Color Red
-                            Write-Log "         Detalle tecnico: $($_.Exception.Message)" -Color DarkRed
-                            $Intentos++  # Incrementa contador de intentos fallidos
-                            Start-Sleep -Seconds 1  # Pausa de seguridad para evitar ataques de fuerza bruta
+                            $Intentos++
+                            Start-Sleep -Seconds 1
                         }
                     }
                 }
             }
 
-            # [TACTICA TIERRA QUEMADA] El archivo solo se borra aqui al final de la lectura
+            # El archivo JSON se elimina aqui
             if (Test-Path $RutaJson) { Remove-Item -Path $RutaJson -Force -ErrorAction SilentlyContinue }
 
             Write-Log "  [OK] Reglas inyectadas y JSON purgado. Saltando cuestionario." -Color Green
             
         } catch {
-            # ESTE ES EL CATCH PRINCIPAL QUE TE FALTABA
             Write-Log "  [X] Error al leer el JSON. Pasando a manual..." -Color Red
             $ModoDesatendido = $false
         }
@@ -240,16 +258,32 @@ if (-not $ModoDesatendido) {
             Write-Log "  [V] Nomenclatura del equipo validada correctamente ($NombreActual)." -Color Green
             $RespuestaDominio = Read-Host "`n> ¿Desea integrar el equipo al dominio corporativo AHORA? [S / Enter=No]"
             
+            # Logica de 3 intentos 
             if ($RespuestaDominio -match "^[sS]$") {
                 $DominioDestino = "plenoil.com"
                 
-                # 1. Validacion DNS Interno (Guardian de Red)
+                # 1. Validacion DNS Interno (Guardian de Red) con Reintentos
                 Write-Log "  -> Verificando red corporativa (DNS Interno)..." -Color Gray
-                $PruebaDNSInterno = Resolve-DnsName "_ldap._tcp.dc._msdcs.$DominioDestino" -Type SRV -ErrorAction SilentlyContinue
+                $RedDetectada = $false
                 
-                if ($null -eq $PruebaDNSInterno) {
-                    Write-Log "     [X] ERROR: No se detecta el DNS interno de $DominioDestino." -Color Red
-                    Write-Log "     -> Cancelando union al dominio (El equipo no esta en la red corporativa)." -Color DarkYellow
+                for ($i = 1; $i -le 3; $i++) {
+                    $PruebaDNSInterno = Resolve-DnsName "_ldap._tcp.dc._msdcs.$DominioDestino" -Type SRV -ErrorAction SilentlyContinue
+                    
+                    if ($null -ne $PruebaDNSInterno) {
+                        $RedDetectada = $true
+                        break
+                    }
+                    
+                    if ($i -lt 3) {
+                        Write-Log "     [!] Intento $i/3 fallido: No se ve el servidor. Verifique el Wi-Fi o conecte un cable de red." -Color Yellow
+                        Write-Log "     -> Reintentando automaticamente en 10 segundos..." -Color DarkGray
+                        Start-Sleep -Seconds 10
+                    }
+                }
+                
+                if (-not $RedDetectada) {
+                    Write-Log "     [X] ERROR: Imposible contactar con el DNS interno de $DominioDestino." -Color Red
+                    Write-Log "     -> Cancelando union al dominio tras 3 intentos. Continuando script..." -Color DarkYellow
                 } else {
                     Write-Log "     [V] Red corporativa detectada. Solicitando credenciales..." -Color Cyan
                     $MeterDominioFase2 = $true
@@ -282,7 +316,7 @@ if (-not $ModoDesatendido) {
                             
                             # 3. Validacion LDAP
                             $Directorio = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$DominioDestino", $Usuario, $Clave)
-                            $Prueba = $Directorio.NativeObject 
+                            [void]$Directorio.NativeObject 
                             
                             Write-Log "     [V] Autenticacion LDAP exitosa. Credenciales confirmadas." -Color Green
                             $CredencialesValidas = $true
@@ -549,50 +583,71 @@ Write-Host "========================================================" -Foregroun
 
 Write-Log "`n[+] Ejecutando cierre de seguridad y recoleccion de logs..." -Color Yellow
 
-# 1. Aplicar contraseña definitiva al usuario HP (Modo Hibrido)
+# 1. Aplicar contraseña definitiva al usuario HP (Modo Hibrido y Memoria de Reintentos)
 try {
-    if (-not [string]::IsNullOrWhiteSpace($global:ZeroTouch_PassHP)) {
+    # Flag que indica al script de que ya se actualizo la pass 
+    $MarcaPass = "C:\Deploy_Plenergy\Logs\Pass_HP_Establecida.flag"
+
+    if (Test-Path $MarcaPass) {
+        Write-Log "  -> [V] Re-ejecucion detectada. La contrasena de HP ya se cambio en un intento anterior. Omitiendo..." -Color DarkGray
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($global:Auto_PassHP)) {
         Write-Log "  -> [Zero Touch] Aplicando contrasena definitiva para HP silenciosamente..." -Color Magenta
-        $SecurePass = ConvertTo-SecureString $global:ZeroTouch_PassHP -AsPlainText -Force
+        $SecurePass = ConvertTo-SecureString $global:Auto_PassHP -AsPlainText -Force
         Get-LocalUser -Name "HP" | Set-LocalUser -Password $SecurePass -ErrorAction Stop
-        Write-Log "  [OK] Contrasena automatica de HP configurada." -Color Green
-    } else {
+        
+        # Dejamos la marca de que ya se hizo
+        New-Item -Path $MarcaPass -ItemType File -Force | Out-Null
+        Write-Log "  [OK] Contrasena automatica configurada." -Color Green
+    } 
+    else {
         Write-Log "  -> Solicitando credenciales definitivas al tecnico..." -Color Cyan
         $CredencialesValidas = $false
+        
         while (-not $CredencialesValidas) {
             try {
-                $MensajeCaja = "Despliegue finalizado. Introduce la contrasena DEFINITIVA para el usuario local."
-                $Credencial = Get-Credential -UserName "HP" -Message $MensajeCaja
+                $MensajeCaja = "Introduce la contrasena DEFINITIVA para el usuario local (HP)."
+                $Credencial = Get-Credential -UserName "HP" -Message $MensajeCaja -ErrorAction Stop
+                
                 Get-LocalUser -Name "HP" | Set-LocalUser -Password $Credencial.Password -ErrorAction Stop
-                Write-Log "  [OK] Contrasena del usuario HP actualizada y asegurada en el sistema." -Color Green
+                
+                # Dejamos la marca de que ya se hizo manualmente
+                New-Item -Path $MarcaPass -ItemType File -Force | Out-Null
+                Write-Log "  [OK] Contrasena actualizada y asegurada en el sistema." -Color Green
                 $CredencialesValidas = $true
             } catch {
-                Write-Log "  [X] Accion cancelada o error. Debes establecer una contrasena obligatoriamente." -Color Red
-                Start-Sleep -Seconds 2
+                Write-Log "  [!] Ventana cancelada." -Color Yellow
+                $OmitirPass = Read-Host "  > ¿Confirmas que el equipo YA TIENE la clave correcta y deseas OMITIR? [S=Omitir / Enter=Reintentar]"
+                
+                if ($OmitirPass -match "^[sS]$") {
+                    Write-Log "  -> [V] Paso omitido conscientemente por el tecnico." -Color DarkGray
+                    break
+                }
             }
         }
     }
 } catch { Write-Log "  [X] Error fatal al establecer la contrasena de HP." -Color Red }
 
-# 2. Eliminar el acceso directo del lanzador
-$RutaLanzador = "$env:PUBLIC\Desktop\LanzadorPlenergy.lnk"
-Remove-Item -Path $RutaLanzador -Force -ErrorAction SilentlyContinue
-
 # 3. Comprimir Logs (Nombre del PC + _Logs)
 $NombreEquipo = $env:COMPUTERNAME
 $RutaZip = "C:\${NombreEquipo}_Logs.zip"
 $RutaLogPPKG = "C:\Log_PPKG.txt"
-$RutaLogsCarpeta = "C:\Deploy_Plenergy\Logs\*"
+$CarpetaLogs = "C:\Deploy_Plenergy\Logs"
 
-$ArchivosAComprimir = @()
-if (Test-Path $RutaLogsCarpeta) { $ArchivosAComprimir += $RutaLogsCarpeta }
-if (Test-Path $RutaLogPPKG) { $ArchivosAComprimir += $RutaLogPPKG }
+try {
+    $ArchivosAComprimir = @()
+    # Quitamos el asterisco (\*). Pasamos la carpeta entera.
+    if (Test-Path $CarpetaLogs) { $ArchivosAComprimir += $CarpetaLogs }
+    if (Test-Path $RutaLogPPKG) { $ArchivosAComprimir += $RutaLogPPKG }
 
-if ($ArchivosAComprimir.Count -gt 0) {
-    try {
-        Compress-Archive -Path $ArchivosAComprimir -DestinationPath $RutaZip -Update -Force
+    if ($ArchivosAComprimir.Count -gt 0) {
+        # Usamos -Force (sobrescribe) sin el -Update, ya que PS5.1 los rechaza juntos
+        Compress-Archive -Path $ArchivosAComprimir -DestinationPath $RutaZip -Force -ErrorAction Stop
         Write-Log "  [OK] Logs consolidados exitosamente en: $RutaZip" -Color Green
-    } catch { Write-Log "  [X] Error al empaquetar los logs." -Color Red }
+    }
+} catch { 
+    # Añadimos el mensaje de error real para saber exactamente qué falló si vuelve a pasar
+    Write-Log "  [X] Error al empaquetar los logs: $($_.Exception.Message)" -Color Red 
 }
 
 # 4. Bloque de Reinicio (Tu logica)
