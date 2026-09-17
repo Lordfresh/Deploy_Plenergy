@@ -509,20 +509,46 @@ if ($MeterDominioFase2) {
     Write-Log "  -> No hay operaciones pendientes de dominio en esta fase." -Color DarkYellow 
 }
 # ---------------------------------------------------------
-# EJECUCION: LIMPIEZA DE ONEDRIVE
+# EJECUCION: LIMPIEZA EXTREMA DE ONEDRIVE (Actuales y Futuros)
 # ---------------------------------------------------------
-Write-Log "`n  -> Verificando y eliminando OneDrive..." -Color Gray
+Write-Log "`n  -> Verificando y aniquilando OneDrive de raiz..." -Color Gray
 try {
+    # 1. Detenemos cualquier proceso en ejecucion
     Stop-Process -Name "OneDrive" -Force -ErrorAction SilentlyContinue
-    $Desinstalador = if (Test-Path "$env:SystemRoot\SysWOW64\OneDriveSetup.exe") { "$env:SystemRoot\SysWOW64\OneDriveSetup.exe" } else { "$env:SystemRoot\System32\OneDriveSetup.exe" }
     
+    # 2. Localizamos y lanzamos el desinstalador nativo
+    $Desinstalador = if (Test-Path "$env:SystemRoot\SysWOW64\OneDriveSetup.exe") { "$env:SystemRoot\SysWOW64\OneDriveSetup.exe" } else { "$env:SystemRoot\System32\OneDriveSetup.exe" }
     if (Test-Path $Desinstalador) { Start-Process -FilePath $Desinstalador -ArgumentList "/uninstall" -Wait -NoNewWindow }
     
-    Remove-Item -Path "$env:USERPROFILE\OneDrive", "$env:LOCALAPPDATA\Microsoft\OneDrive", "$env:PROGRAMDATA\Microsoft OneDrive" -Force -Recurse -ErrorAction SilentlyContinue
+    # 3. Purgamos las carpetas de todos lados, incluido el perfil Default
+    $CarpetasBasura = @(
+        "$env:USERPROFILE\OneDrive",
+        "$env:LOCALAPPDATA\Microsoft\OneDrive",
+        "$env:PROGRAMDATA\Microsoft OneDrive",
+        "C:\Users\Default\OneDrive",
+        "C:\Users\Default\AppData\Local\Microsoft\OneDrive"
+    )
+    foreach ($Carpeta in $CarpetasBasura) { Remove-Item -Path $Carpeta -Force -Recurse -ErrorAction SilentlyContinue }
+    
+    # 4. Limpiamos el registro del usuario actual
     Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "OneDrive" -Force -ErrorAction SilentlyContinue
-    Write-Log "     [OK] Rastros de OneDrive fulminados." -Color Green
-} catch { Write-Log "     [X] Error intentando limpiar restos de OneDrive." -Color DarkYellow }
+    
+    # 5. Evitar que se reinstale en usuarios de dominio)
+    try {
+        reg load "HKU\PerfilMolde" "C:\Users\Default\NTUSER.DAT" | Out-Null
+        Remove-ItemProperty -Path "HKU\PerfilMolde\Software\Microsoft\Windows\CurrentVersion\Run" -Name "OneDriveSetup" -ErrorAction SilentlyContinue
+        reg unload "HKU\PerfilMolde" | Out-Null
+    } catch {
+        reg unload "HKU\PerfilMolde" 2>$null | Out-Null
+    }
 
+    # 6. Borrar el instalador del sistema operativo
+    if (Test-Path $Desinstalador) { Remove-Item -Path $Desinstalador -Force -ErrorAction SilentlyContinue }
+
+    Write-Log "     [OK] OneDrive erradicado para usuarios actuales y futuros." -Color Green
+} catch { 
+    Write-Log "     [X] Error intentando limpiar restos de OneDrive." -Color DarkYellow 
+}
 # ---------------------------------------------------------
 # EJECUCION: CROWDSTRIKE FALCON
 # ---------------------------------------------------------
@@ -559,7 +585,7 @@ if ($InstalarEset -match "^[sS]$") {
 # ---------------------------------------------------------
 Write-Log "`n[+] Modulo de Impresoras..." -Color Yellow
 
-$CarpetaDriversC = "C:\IMPRESORAS\AltaLink_C8030-C8070_5.639.3.0_PS_x64\AltaLink_C8030-C8070_5.639.3.0_PS_x64_Driver.inf"
+$CarpetaDriversC = "C:\IMPRESORAS\UNIV_5.1076.4.0_PS_x64\UNIV_5.1076.4.0_PS_x64_Driver.inf\x3UNIVP.inf"
 $RutaScriptImpresoras = "$CarpetaScripts\Impresoras_Plenergy.ps1" 
 
 if (-not (Test-Path $CarpetaDriversC)) {

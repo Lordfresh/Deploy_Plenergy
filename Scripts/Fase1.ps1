@@ -645,6 +645,7 @@ $PaquetesWinget = @(
     @{ Id = "Microsoft.Teams"; Nombre = "Microsoft Teams" },
     @{ Id = "9WZDNCRFJ4MV"; Nombre = "Lenovo Vantage" },
     @{ Id = "9NKSQGP7F2NH"; Nombre = "WhatsApp" }
+    @{ Id = "Microsoft.Office"; Nombre = "Microsoft 365" }
 )
 
 foreach ($Paquete in $PaquetesWinget) {

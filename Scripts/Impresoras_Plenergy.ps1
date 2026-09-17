@@ -13,9 +13,9 @@ $Impresoras = @(
 )
 
 # 2. Rutas del driver base de Xerox (Corregido)
-$CarpetaDriversLocal = "C:\IMPRESORAS\AltaLink_C8030-C8070_5.639.3.0_PS_x64"
-$RutaINF = "$CarpetaDriversLocal\AltaLink_C8030-C8070_5.639.3.0_PS_x64_Driver.inf"
-$NombreBaseDriver = "Xerox AltaLink C8030 PS" 
+$CarpetaDriversLocal = "C:\IMPRESORAS\UNIV_5.1076.4.0_PS_x64\UNIV_5.1076.4.0_PS_x64_Driver.inf"
+$RutaINF = "$CarpetaDriversLocal\x3UNIVP.inf"
+$NombreBaseDriver = "Xerox Global Print Driver PS"
 
 # 3. Validacion de pre-requisitos locales[cite: 3]
 Write-Host "`n[+] Verificando pre-requisitos de instalacion..." -ForegroundColor Yellow
@@ -37,7 +37,10 @@ if (Test-Path $CarpetaDriversLocal) {
 $ImpresorasAInstalar = @()
 
 # Si detecta variables globales del JSON, asume el control silencioso
-if ($global:Auto_ImpresorasTodas -eq $true) {
+if ($global:Auto_ImpresorasOmitir -eq $true) {
+    Write-Host "`n  [+] Despliegue Autonomo: Se marco NINGUNA impresora en el formulario. Omitiendo instalacion..." -ForegroundColor DarkGray
+    return
+} elseif ($global:Auto_ImpresorasTodas -eq $true) {
     Write-Host "`n  [+] Despliegue Autonomo: Instalando TODAS las impresoras por directiva JSON." -ForegroundColor Magenta
     $ImpresorasAInstalar = $Impresoras
 } elseif ($null -ne $global:Auto_ImpresorasIds -and $global:Auto_ImpresorasIds.Count -gt 0) {

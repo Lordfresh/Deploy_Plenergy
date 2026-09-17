@@ -113,7 +113,7 @@ $LblCID.Text = "CID:"; $LblCID.Location = New-Object System.Drawing.Point(15, 13
 $TxtCID = New-Object System.Windows.Forms.TextBox
 $TxtCID.Location = New-Object System.Drawing.Point(60, 132)
 $TxtCID.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$TxtCID.Width = 350; $TxtCID.Text = "ABC123XYZ"
+$TxtCID.Width = 350; $TxtCID.Text = "293C254EEA0D4EF194C8406915465B81-B6"
 $ChkCrowd.Add_CheckedChanged({ $TxtCID.Enabled = $this.Checked })
 
 $LblImpresorasTxt = New-Object System.Windows.Forms.Label
@@ -142,7 +142,28 @@ $ChkTodasImpresoras.Add_CheckedChanged({
     for ($i = 0; $i -lt $ListaCheckImpresoras.Items.Count; $i++) { $ListaCheckImpresoras.SetItemChecked($i, $this.Checked) }
 })
 
-$GroupSeg.Controls.AddRange(@($ChkBitLocker, $ChkVPN, $ChkMcAfee, $ChkEset, $ChkCrowd, $LblCID, $TxtCID, $LblImpresorasTxt, $TxtImpresoras, $LblImpresorasLista, $ChkTodasImpresoras, $ListaCheckImpresoras))
+# --- NUEVA CASILLA "NINGUNA" ---
+$ChkNinguna = New-Object System.Windows.Forms.CheckBox
+$ChkNinguna.Text = "NINGUNA"
+$ChkNinguna.Location = New-Object System.Drawing.Point(280, 208)
+$ChkNinguna.AutoSize = $true
+$ChkNinguna.ForeColor = [System.Drawing.Color]::OrangeRed
+
+$ChkNinguna.Add_CheckedChanged({
+    if ($this.Checked) {
+        # Si se marca NINGUNA, desmarcamos "Todas" y bloqueamos las listas
+        $ChkTodasImpresoras.Checked = $false
+        $TxtImpresoras.Enabled = $false
+        $TxtImpresoras.Text = ""
+        $ListaCheckImpresoras.Enabled = $false
+        for ($i = 0; $i -lt $ListaCheckImpresoras.Items.Count; $i++) { $ListaCheckImpresoras.SetItemChecked($i, $false) }
+    } else {
+        # Si se desmarca, volvemos a habilitar todo
+        $TxtImpresoras.Enabled = $true
+        $ListaCheckImpresoras.Enabled = $true
+    }
+})
+$GroupSeg.Controls.AddRange(@($ChkBitLocker, $ChkVPN, $ChkMcAfee, $ChkEset, $ChkCrowd, $LblCID, $TxtCID, $LblImpresorasTxt, $TxtImpresoras, $LblImpresorasLista, $ChkTodasImpresoras, $ChkNinguna, $ListaCheckImpresoras))
 
 # --- ZONA DE GUARDADO Y NOMBRE DE ARCHIVO ---
 $LblArchivo = New-Object System.Windows.Forms.Label
@@ -221,17 +242,36 @@ $BtnGenerar.Add_Click({
             InstalarCrowdStrike = $ChkCrowd.Checked
             CID_CrowdStrike = if ($ChkCrowd.Checked -and $TxtCID.Text) { $TxtCID.Text.Trim() } else { $null }
         }
-        Impresoras = @{ InstalarTodas = $InstalarTodas; ImpresorasId = $ImpresorasArray }
+        Impresoras = @{ 
+            Omitir = $ChkNinguna.Checked
+            InstalarTodas = $InstalarTodas 
+            ImpresorasId = $ImpresorasArray }
     }
 
     $NombrePersonalizado = if ($TxtArchivo.ForeColor.Name -eq "Gray" -or [string]::IsNullOrWhiteSpace($TxtArchivo.Text)) { "" } else { $TxtArchivo.Text.Trim() + "_" }
-    $RutaGuardado = "$PSScriptRoot\${NombrePersonalizado}AutoDespliegue.json"
+    $NombreSugerido = "${NombrePersonalizado}AutoDespliegue.json"
     
-    $DatosJson | ConvertTo-Json -Depth 5 | Out-File -FilePath $RutaGuardado -Encoding UTF8 -Force
-    
-    $MensajeAviso = "JSON generado exitosamente en:`n$RutaGuardado`n`n[!] IMPORTANTE:`nAsegúrate de que este archivo esté en la raíz de tu PENDRIVE de maquetado o en C:\Deploy_Plenergy para que el script lo detecte automáticamente."
-    [System.Windows.Forms.MessageBox]::Show($MensajeAviso, "Modo Autónomo Plenergy", 0, [System.Windows.Forms.MessageBoxIcon]::Information)
-    $Form.Close()
+    # 1. Crear el cuadro de diálogo "Guardar como"
+    $SaveDialog = New-Object System.Windows.Forms.SaveFileDialog
+    $SaveDialog.Filter = "Archivos JSON (*.json)|*.json"
+    $SaveDialog.Title = "Guardar archivo de AutoDespliegue (Selecciona tu Pendrive o C:\Deploy_Plenergy)"
+    $SaveDialog.FileName = $NombreSugerido
+    $SaveDialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+
+    # 2. Mostrar la ventana y comprobar si el usuario le dio a "Guardar"
+    if ($SaveDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $RutaGuardado = $SaveDialog.FileName
+        
+        # 3. Guardar el archivo en la ruta seleccionada
+        $DatosJson | ConvertTo-Json -Depth 5 | Out-File -FilePath $RutaGuardado -Encoding UTF8 -Force
+        
+        $MensajeAviso = "JSON generado exitosamente en:`n$RutaGuardado"
+        [System.Windows.Forms.MessageBox]::Show($MensajeAviso, "Modo Autónomo Plenergy", 0, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $Form.Close()
+    } else {
+        # Si el técnico cierra la ventana o le da a "Cancelar", no hacemos nada (el form sigue abierto)
+        Write-Host "Generación de JSON cancelada por el operador." -ForegroundColor Yellow
+    }
 })
 
 $Form.Controls.AddRange(@($GroupId, $GroupSeg, $LblArchivo, $TxtArchivo, $LblExtension, $BtnGenerar))
