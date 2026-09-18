@@ -250,36 +250,44 @@ Write-Log "   MAQUETADOR PLENERGY: FASE 1 (Despliegue Pre-dominio)       " -Colo
 Write-Host "================================================================" -ForegroundColor Cyan
 
 # =========================================================
-# INTERCEPTOR ZERO TOUCH (JSON)
+# INTERCEPTOR JSON
 # =========================================================
 $ModoDesatendido = $false
 $RutaJson = $null
-$ArchivosJsonEncontrados = @()
+$NombreJson = ""
 
 Write-Log "`n[+] Buscando archivo de configuracion Zero Touch (*AutoDespliegue.json)..." -Color Gray
 
-# 1. Buscar en la carpeta local base
-$ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
-if ($ArchivosLocales) { $ArchivosJsonEncontrados += $ArchivosLocales }
+# 1. Buscar PRIMERO en el disco C: (Prioridad absoluta)
+$ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 
-# 2. Buscar en la raiz de todos los pendrives conectados
-$UnidadesUSB = Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 2
-foreach ($USB in $UnidadesUSB) {
-    $RutaRaizUSB = "$($USB.DeviceID)\"
-    $ArchivosUSB = Get-ChildItem -Path $RutaRaizUSB -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
-    if ($ArchivosUSB) { $ArchivosJsonEncontrados += $ArchivosUSB }
+if ($ArchivosLocales.Count -gt 0) {
+    $RutaJson = $ArchivosLocales[0].FullName
+    $NombreJson = $ArchivosLocales[0].Name
+    Write-Log "  [V] Archivo local detectado en C: -> $NombreJson" -Color Cyan
+} else {
+    # 2. Si no esta en C:, buscar en pendrives
+    Write-Log "  -> No hay JSON en C:. Escaneando puertos USB..." -Color Gray
+    $ArchivosUSB = @()
+    $UnidadesUSB = Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 2
+    foreach ($USB in $UnidadesUSB) {
+        $RutaRaizUSB = "$($USB.DeviceID)\"
+        $Encontrados = Get-ChildItem -Path $RutaRaizUSB -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
+        if ($Encontrados) { $ArchivosUSB += $Encontrados }
+    }
+
+    if ($ArchivosUSB.Count -gt 0) {
+        $ArchivosUSB = $ArchivosUSB | Sort-Object LastWriteTime -Descending
+        $RutaJson = $ArchivosUSB[0].FullName
+        $NombreJson = $ArchivosUSB[0].Name
+        Write-Log "  [V] Archivo detectado en USB -> $NombreJson" -Color Cyan
+    }
 }
 
-# 3. Ordenar TODOS los encontrados por fecha (El mas reciente gana) y procesar
-if ($ArchivosJsonEncontrados.Count -gt 0) {
-    $ArchivosJsonEncontrados = $ArchivosJsonEncontrados | Sort-Object LastWriteTime -Descending
-    $RutaJson = $ArchivosJsonEncontrados[0].FullName
-    
-    Write-Log "  [V] Archivo mas reciente detectado: $RutaJson" -Color Cyan
-
+if ($RutaJson) {
     $wshell = New-Object -ComObject Wscript.Shell
     # 4 (Sí/No) + 32 (Pregunta) + 4096 (Siempre arriba)
-    $MensajeJson = "Se ha detectado el archivo de configuracion MAS RECIENTE:`n$($ArchivosJsonEncontrados[0].Name)`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
+    $MensajeJson = "Se ha detectado el archivo de configuracion:`n$NombreJson`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
     $Respuesta = $wshell.Popup($MensajeJson, 10, "Modo Autonomo Detectado", 4 + 32 + 4096)
 
     # Si pulsa 'Sí' (6) o se agota el tiempo (-1)
@@ -287,49 +295,21 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
         Write-Log "  [+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
         $ModoDesatendido = $true
         
-        # Copiar el JSON al disco C: si viene del USB (Failsafe)
         if ($RutaJson -notmatch "^C:\\Deploy_Plenergy") {
             Copy-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
-            Write-Log "  [i] Archivo JSON clonado al disco C: por seguridad." -Color DarkGray
+            $RutaJson = "$RutaBase\AutoDespliegue.json"
+            Write-Log "  [i] Archivo JSON clonado al disco C: para procesamiento seguro." -Color DarkGray
         }
 
-              
+        # NUEVO: Leer las reglas del JSON para la Fase 1
         try {
             $Config = Get-Content $RutaJson | ConvertFrom-Json
-
-            # 1. Validacion Segura de Contrasena
-            if (-not [string]::IsNullOrWhiteSpace($Config.Identidad.PasswordSistemas)) {
-                $SysPassSecure = ConvertTo-SecureString $Config.Identidad.PasswordSistemas -AsPlainText -Force
-            } else {
-                $SysPassSecure = $null
-                Write-Log "  [!] PasswordSistemas vacio en JSON. Se omitira la creacion del usuario." -Color DarkYellow
-            }
-
-            # 2. Asignacion con valores por defecto (Anti-Errores)
-            $OpcionEmpresa = if ($Config.Identidad.DivisionEmpresa) { [string]$Config.Identidad.DivisionEmpresa } else { "1" }
-            
-            # Asignar el nombre exacto del JSON, o dejar en $null para mantener el nombre original
-            if (-not [string]::IsNullOrWhiteSpace($Config.Identidad.PrefijoEquipo)) {
-                $NuevoNombre = $Config.Identidad.PrefijoEquipo
-            } else {
-                $NuevoNombre = $null
-                Write-Log "  [i] Nombre de equipo vacio en JSON. Se mantendra el nombre actual de fabrica." -Color DarkYellow
-            }
-            
-            $AutoReinicio  = [bool]$Config.Despliegue.AutoReinicio
-            $EjecutarFase2 = if ($Config.Despliegue.ContinuarFase2) { "S" } else { "N" }
-            $OpcionMcAfee  = if ($Config.Limpieza.DesinstalarMcAfee) { "1" } else { "0" }
-            
-            Write-Log "  [OK] Variables inyectadas en memoria. Saltando cuestionario." -Color Green
+            if ($Config.Despliegue.ContinuarFase2) { $EjecutarFase2 = "S" }
+            $PassHP = $Config.Identidad.PasswordHP
         } catch {
-            Write-Log "  [X] Error fatal al leer el JSON. Revisa el formato. Pasando a manual..." -Color Red
-            $ModoDesatendido = $false
+            Write-Log "  [X] Error al procesar el JSON." -Color Red
         }
-    } else {
-        Write-Log "  [-] Modo autonomo cancelado por el usuario. Iniciando asistente manual..." -Color DarkYellow
     }
-} else {
-    Write-Log "  [-] No se encontro ningun JSON de autodespliegue. Iniciando asistente manual..." -Color Gray
 }
 
 # =========================================================
@@ -426,8 +406,21 @@ if (-not $ModoDesatendido) {
     }
     Write-Log "Q&A - Empresa: El usuario selecciono $NombreEmpresaLog (Opcion $OpcionEmpresa)" -Nivel DEBUG -Silencioso
 
+   
+
     # 6. Consulta para ejecutar Fase2 del tiron
-    $EjecutarFase2 = Read-Host "¿Continuar con Fase 2 tras el reinicio? [S / Enter=No]"
+    $EjecutarFase2 = Read-Host "`n> ¿Continuar con Fase 2 tras el reinicio? [S / Enter=No]"
+    
+    if (-not $PassHP) { $PassHP = "Temporal123!" } # Failsafe por si acaso
+
+    if ($EjecutarFase2 -match "^[sS]$") {
+        Write-Log "  -> Preparando salto a Fase 2..." -Color Cyan
+        $EntradaHP = Read-Host "  > Introduce la contrasena ACTUAL de la cuenta HP para el AutoLogon"
+        if (-not [string]::IsNullOrWhiteSpace($EntradaHP)) {
+            $PassHP = $EntradaHP.Trim()
+        }
+        Write-Log "Q&A - Fase 2: Ejecucion continua programada. Contrasena HP capturada." -Nivel DEBUG -Silencioso
+    }
 }
 
 
@@ -594,19 +587,6 @@ if (Test-Path "C:\Program Files*\DisplayLink Core Software") {
     } else { Write-Log "  [!] Instalador de DisplayLink no encontrado en $CarpetaSoftware." -Color Red }
 }
 
-# --- PDF24 ---
-if (Test-Path "C:\Program Files*\PDF24\pdf24-Creator.exe") {
-    Write-Log "  [~] PDF24 ya esta instalado. Omitiendo..." -Color DarkYellow
-} else {
-    $PDFPath = "$CarpetaSoftware\pdf24-creator.msi"
-    if (Test-Path $PDFPath) {
-        try {
-            Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$PDFPath`" AUTOUPDATE=Yes DESKTOPICONS=Yes /qn /norestart" -Wait -NoNewWindow -ErrorAction Stop
-            Get-ChildItem -Path "C:\Users\Public\Desktop\*.lnk" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "PDF24" -and $_.Name -notmatch "Toolbox" } | Remove-Item -Force -ErrorAction SilentlyContinue
-            Write-Log "  [OK] PDF24 instalado (Solo icono Toolbox)." -Color Green
-        } catch { Write-Log "  [X] Error al instalar PDF24." -Color Red }
-    } else { Write-Log "  [!] Instalador de PDF24 no encontrado en $CarpetaSoftware." -Color Red }
-}
 
 # --- KeePass ---
 if (Test-Path "C:\Program Files*\KeePass Password Safe 2\KeePass.exe") {
@@ -644,8 +624,9 @@ $PaquetesWinget = @(
     @{ Id = "VideoLAN.VLC"; Nombre = "VLC Media Player" },
     @{ Id = "Microsoft.Teams"; Nombre = "Microsoft Teams" },
     @{ Id = "9WZDNCRFJ4MV"; Nombre = "Lenovo Vantage" },
-    @{ Id = "9NKSQGP7F2NH"; Nombre = "WhatsApp" }
-    @{ Id = "Microsoft.Office"; Nombre = "Microsoft 365" }
+    @{ Id = "9NKSQGP7F2NH"; Nombre = "WhatsApp" },
+    @{ Id = "Microsoft.Office"; Nombre = "Microsoft 365" },
+    @{ Id = "geeksoftwareGmbH.PDF24Creator"; Nombre = "PDF24" } # PDF24 añadido a la lista
 )
 
 foreach ($Paquete in $PaquetesWinget) {
@@ -656,10 +637,24 @@ foreach ($Paquete in $PaquetesWinget) {
     
     try {
         $Proc = Start-Process -FilePath "winget" -ArgumentList $ArgsWinget -Wait -NoNewWindow -PassThru -ErrorAction Stop
-        if ($Proc.ExitCode -eq 0) { Write-Log "  [OK] $($Paquete.Nombre) instalado correctamente." -Color Green }
-        elseif ($Proc.ExitCode -eq -1978335189) { Write-Log "  [~] $($Paquete.Nombre) ya estaba instalado." -Color DarkYellow }
-        else { Write-Log "  [X] Hubo un problema al procesar $($Paquete.Nombre). (ExitCode: $($Proc.ExitCode))" -Color Red }
-    } catch { Write-Log "  [X] Error critico con Winget para $($Paquete.Nombre)." -Color Red }
+        
+        if ($Proc.ExitCode -eq 0 -or $Proc.ExitCode -eq -1978335189) { 
+            if ($Proc.ExitCode -eq 0) { Write-Log "  [OK] $($Paquete.Nombre) instalado correctamente." -Color Green }
+            else { Write-Log "  [~] $($Paquete.Nombre) ya estaba instalado." -Color DarkYellow }
+            
+            # === RUTINA EXCLUSIVA PARA PDF24 ===
+            if ($Paquete.Nombre -eq "PDF24") {
+                Start-Sleep -Seconds 3 # Tiempo para que Winget suelte los accesos directos
+                Get-ChildItem -Path "C:\Users\Public\Desktop\*.lnk" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "PDF24" -and $_.Name -notmatch "Toolbox" } | Remove-Item -Force -ErrorAction SilentlyContinue
+                Write-Log "    -> Accesos directos de PDF24 limpiados (Solo icono Toolbox)." -Color Gray
+            }
+            
+        } else { 
+            Write-Log "  [X] Hubo un problema al procesar $($Paquete.Nombre). (ExitCode: $($Proc.ExitCode))" -Color Red 
+        }
+    } catch { 
+        Write-Log "  [X] Error critico con Winget para $($Paquete.Nombre)." -Color Red 
+    }
 }
 
 # ---------------------------------------------------------
@@ -821,44 +816,31 @@ if ($EjecutarFase2 -match "^[sS]$") {
     Write-Log "`n[+] Construyendo puente hacia Fase 2..." -Color Yellow
 
     $UsuarioAdmin = "HP" 
-    $PassTemp = "Temporal123!" # Contraseña temporal, se pedira el cambio al finalizar Fase2.ps1
+    # La logica maestra: Si hay dato, se usa. Si no, asume la del .bat inicial
+    $PassConfigurar = if ($PassHP) { $PassHP } else { "Temporal123!" }
 
-    # 1. Seguro Anti-Bloqueo: Forzar contraseña conocida
-    try {
-        net user $UsuarioAdmin $PassTemp | Out-Null
-        Write-Log "  [OK] Contrasena de $UsuarioAdmin forzada a '$PassTemp' para evitar bloqueos." -Color Green
-    } catch {
-        Write-Log "  [X] Error al resetear la contrasena. El AutoLogon podria fallar." -Color Red
-    }
-
-    # 2. Inyeccion de AutoLogon
     try {
         $WinlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         Set-ItemProperty -Path $WinlogonPath -Name "AutoAdminLogon" -Value "1" -Type String -Force
         Set-ItemProperty -Path $WinlogonPath -Name "DefaultUserName" -Value $UsuarioAdmin -Type String -Force
-        Set-ItemProperty -Path $WinlogonPath -Name "DefaultPassword" -Value $PassTemp -Type String -Force
-        # Limita el autologon a 1 sola vez para que no se quede en bucle infinito en el futuro
+        Set-ItemProperty -Path $WinlogonPath -Name "DefaultPassword" -Value $PassConfigurar -Type String -Force
         Set-ItemProperty -Path $WinlogonPath -Name "AutoLogonCount" -Value 1 -Type DWord -Force
-        Write-Log "  [OK] Inicio de sesion automatico configurado." -Color Green
+        Write-Log "  [OK] Inicio de sesion automatico programado." -Color Green
     } catch {
         Write-Log "  [X] Fallo al escribir las claves de Winlogon." -Color Red
     }
 
-    # 3. Lanzador de Arranque (RunOnce)
     try {
         $RunOncePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
-        # Llamamos a PowerShell saltando las restricciones y maximizando la ventana
         $ComandoFase2 = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Maximized -File `"C:\Deploy_Plenergy\Scripts\Fase2.ps1`""
         Set-ItemProperty -Path $RunOncePath -Name "DespliegueFase2" -Value $ComandoFase2 -Type String -Force
         Write-Log "  [OK] Fase 2 programada en RunOnce exitosamente." -Color Green
-        
-        # Como vamos a Fase 2, el reinicio de Fase 1 se vuelve obligatorio
         $AutoReinicio = $true 
     } catch {
         Write-Log "  [X] Fallo al programar el RunOnce." -Color Red
     }
 } else {
-    Write-Log "`n[-] Puente a Fase 2 omitido (El usuario marco 'N')." -Color DarkGray
+    Write-Log "`n[-] Puente a Fase 2 omitido." -Color DarkGray
 }
 
 # ---------------------------------------------------------

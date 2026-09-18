@@ -59,44 +59,54 @@ $BitLockerYaActivo = ($EstadoBL.ProtectionStatus -eq 'On')
 # =========================================================
 $ModoDesatendido = $false
 $RutaJson = $null
-$ArchivosJsonEncontrados = @()
+$NombreJson = ""
 
-Write-Log "`n[+] Buscando archivo de autodespliegue (*AutoDespliegue.json)..." -Color Gray
+Write-Log "`n[+] Buscando archivo de configuracion Zero Touch (*AutoDespliegue.json)..." -Color Gray
 
-# 1. Buscar en la carpeta local base
-$ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
-if ($ArchivosLocales) { $ArchivosJsonEncontrados += $ArchivosLocales }
+# 1. Buscar PRIMERO en el disco C: (Prioridad absoluta)
+$ArchivosLocales = Get-ChildItem -Path $RutaBase -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 
-# 2. Buscar en la raiz de todos los pendrives conectados
-$UnidadesUSB = Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 2
-foreach ($USB in $UnidadesUSB) {
-    $RutaRaizUSB = "$($USB.DeviceID)\"
-    $ArchivosUSB = Get-ChildItem -Path $RutaRaizUSB -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
-    if ($ArchivosUSB) { $ArchivosJsonEncontrados += $ArchivosUSB }
+if ($ArchivosLocales.Count -gt 0) {
+    $RutaJson = $ArchivosLocales[0].FullName
+    $NombreJson = $ArchivosLocales[0].Name
+    Write-Log "  [V] Archivo local detectado en C: -> $NombreJson" -Color Cyan
+} else {
+    # 2. Si no esta en C:, buscar en pendrives
+    Write-Log "  -> No hay JSON en C:. Escaneando puertos USB..." -Color Gray
+    $ArchivosUSB = @()
+    $UnidadesUSB = Get-CimInstance Win32_LogicalDisk | Where-Object DriveType -eq 2
+    foreach ($USB in $UnidadesUSB) {
+        $RutaRaizUSB = "$($USB.DeviceID)\"
+        $Encontrados = Get-ChildItem -Path $RutaRaizUSB -Filter "*AutoDespliegue.json" -File -ErrorAction SilentlyContinue
+        if ($Encontrados) { $ArchivosUSB += $Encontrados }
+    }
+
+    if ($ArchivosUSB.Count -gt 0) {
+        $ArchivosUSB = $ArchivosUSB | Sort-Object LastWriteTime -Descending
+        $RutaJson = $ArchivosUSB[0].FullName
+        $NombreJson = $ArchivosUSB[0].Name
+        Write-Log "  [V] Archivo detectado en USB -> $NombreJson" -Color Cyan
+    }
 }
 
-# 3. Ordenar TODOS los encontrados por fecha
-if ($ArchivosJsonEncontrados.Count -gt 0) {
-    $ArchivosJsonEncontrados = $ArchivosJsonEncontrados | Sort-Object LastWriteTime -Descending
-    $RutaJson = $ArchivosJsonEncontrados[0].FullName
-}    
-    Write-Log "  [V] Archivo mas reciente detectado: $RutaJson" -Color Cyan
-
+if ($RutaJson) {
     $wshell = New-Object -ComObject Wscript.Shell
     # 4 (Sí/No) + 32 (Pregunta) + 4096 (Siempre arriba)
-    $MensajeJson = "Se ha detectado el archivo de configuracion MAS RECIENTE:`n$($ArchivosJsonEncontrados[0].Name)`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
+    $MensajeJson = "Se ha detectado el archivo de configuracion:`n$NombreJson`n`n¿Deseas aplicar la configuracion automatica ZERO TOUCH?`n`n(Si no respondes en 10 segundos, se aplicara automaticamente)"
     $Respuesta = $wshell.Popup($MensajeJson, 10, "Modo Autonomo Detectado", 4 + 32 + 4096)
 
     # Si pulsa 'Sí' (6) o se agota el tiempo (-1)
     if ($Respuesta -eq 6 -or $Respuesta -eq -1) {
-        Write-Log "  [+] Modo auto activado. Mapeando cerebro JSON..." -Color Magenta
+        Write-Log "  [+] Modo ZERO TOUCH activado. Mapeando cerebro JSON..." -Color Magenta
         $ModoDesatendido = $true
         
-        # Mueve el JSON al disco C: si viene del USB
+        # Failsafe: Si viene del USB, COPIARLO a C: para la Fase 2 (NUNCA mover ni borrar el del USB)
         if ($RutaJson -notmatch "^C:\\Deploy_Plenergy") {
-            Move-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
-            Write-Log "  [i] Archivo JSON movido al disco C: por seguridad." -Color DarkGray
+            Copy-Item -Path $RutaJson -Destination "$RutaBase\AutoDespliegue.json" -Force -ErrorAction SilentlyContinue
+            $RutaJson = "$RutaBase\AutoDespliegue.json"
+            Write-Log "  [i] Archivo JSON clonado al disco C: para procesamiento seguro." -Color DarkGray
         }
+
 
         
        try {
@@ -189,22 +199,33 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
                         }
 
                         try {
-                            $MensajeCaja = "Intento $($Intentos + 1) de $MaxIntentos : Introduce credenciales de dominio (Validacion LDAP interna)"
+                            $MensajeCaja = "Intento $($Intentos + 1) de $MaxIntentos : Credenciales de administrador"
                             $CredencialesTemp = Get-Credential -UserName "$DominioDestino\ntmaster1" -Message $MensajeCaja -ErrorAction Stop
                             
                             $Usuario = $CredencialesTemp.UserName
                             $Clave = $CredencialesTemp.GetNetworkCredential().Password
                             
-                            # 3. Validacion LDAP
-                            $Directorio = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$DominioDestino", $Usuario, $Clave)
-                            [void]$Directorio.NativeObject 
+                            # 3. Validacion estricta
+                            Add-Type -AssemblyName System.DirectoryServices.AccountManagement
                             
-                            Write-Log "     [V] Autenticacion LDAP exitosa." -Color Green
-                            $CredencialesValidas = $true
-                            $global:Auto_CredencialesDominio = $CredencialesTemp
-                            $MeterDominioFase2 = $true
-                        } 
-                        catch {
+                            # Limpiamos el nombre por si Get-Credential devuelve "Dominio\Usuario"
+                            $SoloUsuario = $Usuario -replace "^.*\\", ""
+                            
+                            $Contexto = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Domain, $DominioDestino)
+                            
+                            # ValidateCredentials devuelve booleano (True/False)
+                            if ($Contexto.ValidateCredentials($SoloUsuario, $Clave)) {
+                                Write-Log "     [V] Autenticacion LDAP exitosa. Credenciales confirmadas." -Color Green
+                                $CredencialesValidas = $true
+                                
+                                # Exportamos segun si es el bloque Hibrido o el Manual
+                                if ($ModoDesatendido) { $global:Auto_CredencialesDominio = $CredencialesTemp }
+                                else { $CredencialesF2 = $CredencialesTemp }
+                            } else {
+                                # Si devuelve False, forzamos el fallo para que salte al catch
+                                throw "El AD rechazo las credenciales."
+                            }
+                        } catch {
                             Write-Log "     [X] ERROR: Credenciales rechazadas o ventana cancelada." -Color Red
                             $Intentos++
                             Start-Sleep -Seconds 1
@@ -222,7 +243,7 @@ if ($ArchivosJsonEncontrados.Count -gt 0) {
             Write-Log "  [X] Error al leer el JSON. Pasando a manual..." -Color Red
             $ModoDesatendido = $false
         }
-    else {
+    }else {
         Write-Log "  [-] Autodespliegue cancelado. Iniciando cuestionario manual..." -Color DarkYellow
     }
 }
@@ -308,19 +329,32 @@ if (-not $ModoDesatendido) {
                         }
 
                         try {
-                            $MensajeCaja = "Intento $($Intentos + 1) de $MaxIntentos : Credenciales de administrador (Validacion LDAP)"
+                            $MensajeCaja = "Intento $($Intentos + 1) de $MaxIntentos : Credenciales de administrador"
                             $CredencialesTemp = Get-Credential -UserName "$DominioDestino\ntmaster1" -Message $MensajeCaja -ErrorAction Stop
                             
                             $Usuario = $CredencialesTemp.UserName
                             $Clave = $CredencialesTemp.GetNetworkCredential().Password
                             
-                            # 3. Validacion LDAP
-                            $Directorio = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$DominioDestino", $Usuario, $Clave)
-                            [void]$Directorio.NativeObject 
+                            # 3. Validacion REAL (Estricta)
+                            Add-Type -AssemblyName System.DirectoryServices.AccountManagement
                             
-                            Write-Log "     [V] Autenticacion LDAP exitosa. Credenciales confirmadas." -Color Green
-                            $CredencialesValidas = $true
-                            $CredencialesF2 = $CredencialesTemp
+                            # Limpiamos el nombre por si Get-Credential devuelve "Dominio\Usuario"
+                            $SoloUsuario = $Usuario -replace "^.*\\", ""
+                            
+                            $Contexto = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Domain, $DominioDestino)
+                            
+                            # ValidateCredentials devuelve un booleano insobornable (True/False)
+                            if ($Contexto.ValidateCredentials($SoloUsuario, $Clave)) {
+                                Write-Log "     [V] Autenticacion LDAP exitosa. Credenciales confirmadas." -Color Green
+                                $CredencialesValidas = $true
+                                
+                                # Exportamos segun si es el bloque Hibrido o el Manual
+                                if ($ModoDesatendido) { $global:Auto_CredencialesDominio = $CredencialesTemp }
+                                else { $CredencialesF2 = $CredencialesTemp }
+                            } else {
+                                # Si devuelve False, forzamos el fallo para que salte al catch
+                                throw "El AD rechazo las credenciales."
+                            }
                         } catch {
                             Write-Log "     [X] ERROR: Credenciales rechazadas o ventana cancelada." -Color Red
                             $Intentos++
@@ -427,6 +461,7 @@ if ($ActivarBitLocker -match "^[sS]$") {
                        "       GUARDALO EN EL INVENTARIO         `r`n" +
                        "=========================================`r`n`r`n" +
                        "Equipo de fabrica: $($env:COMPUTERNAME)`r`n" +
+                       "ANYDESK: $RutaTxtID`r`n" +
                        "Serial Number: $NumeroSerie`r`n" +
                        "Nombre Asignado: $NombrePC`r`n" +
                        "Identificador: $ID`r`n" +
